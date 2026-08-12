@@ -1,0 +1,55 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+
+# ===== Virtual envs =====
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+# ===== Distribution / build =====
+build/
+dist/
+wheels/
+*.whl
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# ===== Project runtime data =====
+# All runtime data should be excluded. The directory itself is kept
+# in version control via .gitkeep so the structure is reproducible.
+data/*
+!data/.gitkeep
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== Test / coverage =====
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
+.tox/
+.cache/
+
+# ===== Local secrets =====
+.env
+.env.local
+*.pem
+*.key

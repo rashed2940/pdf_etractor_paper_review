@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Ask a Question{% endblock %}
+
+{% block content %}
+<h1 class="mb-3">Ask Questions About Your Papers</h1>
+<p class="text-muted">
+  Answers are grounded in the uploaded papers. Sources cite paper + page.
+</p>
+
+<form method="post" class="mb-4">
+  <div class="input-group">
+    <input type="text" name="question" class="form-control"
+           placeholder="e.g. Which papers discuss LLM security?"
+           value="{{ question_text }}" required minlength="3">
+    <button class="btn btn-primary" type="submit">Ask</button>
+  </div>
+</form>
+
+{% if error %}
+  <div class="alert alert-warning">{{ error }}</div>
+{% endif %}
+
+{% if qa %}
+  <div class="card">
+    <div class="card-body">
+      <h5 class="card-title">Answer</h5>
+      <p class="card-text" style="white-space: pre-wrap;">{{ qa.answer }}</p>
+
+      {% if qa.refused %}
+        <div class="alert alert-info mb-0">
+          The system explicitly refused because retrieved evidence was insufficient.
+        </div>
+      {% else %}
+        <h6 class="mt-4">Sources</h6>
+        {% if qa.sources %}
+          <ul class="list-group list-group-flush">
+            {% for s in qa.sources %}
+              <li class="list-group-item small">
+                <strong>Paper {{ s.paper_id[:16] }}…</strong>
+                — Page {{ s.page or '?' }}
+                {% if s.section %} · Section: {{ s.section }}{% endif %}
+                <div class="text-muted">{{ s.text }}</div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-muted small">No specific sources cited.</p>
+        {% endif %}
+      {% endif %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

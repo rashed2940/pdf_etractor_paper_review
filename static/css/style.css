@@ -1,0 +1,47 @@
+/* Cybersecurity Paper Analyzer — minimal custom styles on top of Bootstrap 5 */
+
+body {
+    background: #f6f8fb;
+}
+
+.card {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04);
+}
+
+.navbar-brand {
+    letter-spacing: 0.5px;
+}
+
+.text-truncate {
+    display: inline-block;
+    max-width: 100%;
+    vertical-align: bottom;
+}
+
+.badge {
+    font-weight: 500;
+}
+
+#upload-feedback .alert {
+    margin-bottom: 0.5rem;
+}
+
+/* Status chip animation for "analyzing" / "extracting" states */
+.badge.bg-info,
+.badge.bg-primary {
+    animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Results table sort indicators */
+#papers-table th[role="button"]:hover {
+    background: #495057;
+    cursor: pointer;
+}
+
+#papers-table th.sort-asc::after { content: " ▲"; }
+#papers-table th.sort-desc::after { content: " ▼"; }

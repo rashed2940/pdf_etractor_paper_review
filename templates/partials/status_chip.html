@@ -1,0 +1,22 @@
+{% macro status_chip(status) -%}
+  {% set map = {
+    'queued':      ('bg-secondary', '⏳ Queued'),
+    'extracting':  ('bg-primary',   '📄 Extracting'),
+    'chunking':    ('bg-primary',   '✂️ Chunking'),
+    'embedding':   ('bg-primary',   '🧠 Embedding'),
+    'indexing':    ('bg-primary',   '🗂️ Indexing'),
+    'analyzing':   ('bg-info',      '🤖 Analyzing'),
+    'done':        ('bg-success',   '✓ Done'),
+    'failed':      ('bg-danger',    '✗ Failed'),
+  } %}
+  {% set cls, label = map.get(status.state, ('bg-secondary', status.state)) %}
+  <span class="badge {{ cls }} me-2 mb-2">
+    {{ status.filename }} — {{ label }}
+    {% if status.progress and status.state != 'done' and status.state != 'failed' %}
+      ({{ (status.progress * 100) | round(0) | int }}%)
+    {% endif %}
+  </span>
+  {% if status.error %}
+    <div class="text-danger small ms-2 mb-2">{{ status.error }}</div>
+  {% endif %}
+{%- endmacro %}

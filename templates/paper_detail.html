@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Paper Detail{% endblock %}
+
+{% block content %}
+<h1 class="mb-3">Paper Detail</h1>
+<p class="text-muted small">paper_id: {{ paper_id }}</p>
+
+{% if analysis is none %}
+  <div class="alert alert-warning">
+    This paper isn't available yet. It may still be processing, or the
+    paper_id is unknown.
+  </div>
+  <p><a class="btn btn-outline-secondary" href="{{ url_for('results_page') }}">Back to results</a></p>
+{% else %}
+  <div class="card mb-3">
+    <div class="card-body">
+      <h3 class="card-title">{{ analysis.title or "(title not available)" }}</h3>
+      <p class="text-muted">
+        {{ analysis.authors | join(', ') if analysis.authors else "Authors not available" }}
+        · {{ analysis.publication_date or "Date not available" }}
+        {% if analysis.paper_id %} · <code>{{ analysis.paper_id[:16] }}…</code>{% endif %}
+      </p>
+    </div>
+  </div>
+
+  {% if analysis.summary %}
+    <div class="card mb-3">
+      <div class="card-body">
+        <h5>Summary</h5>
+        <p style="white-space: pre-wrap;">{{ analysis.summary }}</p>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if analysis.cybersecurity_area %}
+    <div class="mb-3">
+      <h5>Cybersecurity Areas</h5>
+      {% for a in analysis.cybersecurity_area %}
+        <span class="badge bg-info text-dark me-1">{{ a }}</span>
+      {% endfor %}
+    </div>
+  {% endif %}
+
+  {% if analysis.problem_statement or analysis.proposed_solution %}
+    <div class="card mb-3">
+      <div class="card-body">
+        {% if analysis.problem_statement %}
+          <h6>Problem</h6>
+          <p>{{ analysis.problem_statement }}</p>
+        {% endif %}
+        {% if analysis.proposed_solution %}
+          <h6>Proposed Solution</h6>
+          <p>{{ analysis.proposed_solution }}</p>
+        {% endif %}
+        {% if analysis.methodology %}
+          <h6>Methodology</h6>
+          <p>{{ analysis.methodology }}</p>
+        {% endif %}
+        {% if analysis.datasets %}
+          <h6>Datasets</h6>
+          <ul>{% for d in analysis.datasets %}<li>{{ d }}</li>{% endfor %}</ul>
+        {% endif %}
+        {% if analysis.key_results %}
+          <h6>Key Results</h6>
+          <p>{{ analysis.key_results }}</p>
+        {% endif %}
+        {% if analysis.limitations %}
+          <h6>Limitations</h6>
+          <p>{{ analysis.limitations }}</p>
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if analysis.sources %}
+    <div class="card">
+      <div class="card-body">
+        <h5>Sources ({{ analysis.sources | length }})</h5>
+        <ul class="list-group list-group-flush">
+          {% for s in analysis.sources %}
+            <li class="list-group-item small">
+              <strong>Page {{ s.page or '?' }}</strong>
+              {% if s.section %} · {{ s.section }}{% endif %}
+              <div class="text-muted">{{ s.text }}</div>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

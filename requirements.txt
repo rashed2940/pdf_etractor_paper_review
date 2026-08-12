@@ -1,0 +1,48 @@
+# Cybersecurity Paper RAG — runtime + dev dependencies
+# Pin to known-good versions for reproducibility.
+
+# --- Core ---
+python-dotenv>=1.0.0,<2.0.0
+pydantic>=2.6.0,<3.0.0
+pydantic-settings>=2.2.0,<3.0.0
+
+# --- Web ---
+Flask>=3.0.0,<4.0.0
+Werkzeug>=3.0.0,<4.0.0
+
+# --- LLM + Embeddings ---
+# Native `ollama` package is the **active** runtime dependency for both
+# chat and embeddings (Ollama runs the models locally on your machine).
+ollama>=0.4.0,<1.0.0
+
+# LangChain is still used for document loading / splitting / chaining.
+# We do NOT depend on `langchain-ollama` — we use the native ollama
+# client directly (see `llm/ollama_client.py`).
+langchain>=0.2.0,<1.0.0
+langchain-community>=0.2.0,<1.0.0
+langchain-openai>=0.1.0,<1.0.0   # optional OpenAI-compatible fallback
+
+# --- Vector store ---
+chromadb>=0.5.0,<1.0.0
+
+# --- Embeddings (alternative local backend) ---
+# Only required if EMBEDDING_PROVIDER=sentence_transformers.
+# The default is `ollama` (embeddinggemma) — leave this installed if
+# you plan to switch providers.
+sentence-transformers>=2.7.0,<3.0.0
+
+# --- PDF parsing ---
+PyMuPDF>=1.24.0,<2.0.0          # primary text extraction
+# pytesseract>=0.3.10,<1.0.0    # OCR (opt-in, Phase 1)
+# pdf2image>=1.17.0,<2.0.0      # OCR helper (opt-in)
+
+# --- Tokenization / chunking ---
+tiktoken>=0.7.0,<1.0.0          # accurate token counting for chunker
+
+# --- Utilities ---
+typing-extensions>=4.10.0
+
+# --- Dev / testing ---
+pytest>=8.0.0,<9.0.0
+pytest-cov>=4.1.0,<6.0.0
+pytest-mock>=3.12.0,<4.0.0

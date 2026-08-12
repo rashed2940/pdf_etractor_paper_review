@@ -1,0 +1,33 @@
+<tr data-paper-id="{{ analysis.paper_id }}"
+    data-title="{{ (analysis.title or '') | lower }}"
+    data-authors="{{ (analysis.authors | join(' ') if analysis.authors else '') | lower }}"
+    data-summary="{{ (analysis.summary or '') | lower }}"
+    data-area="{{ (analysis.cybersecurity_area | join(' ') if analysis.cybersecurity_area else '') | lower }}">
+  <td>
+    <a href="{{ url_for('paper_detail', paper_id=analysis.paper_id) }}">
+      {{ analysis.title or "(untitled)" }}
+    </a>
+  </td>
+  <td>{{ analysis.authors | join(', ') if analysis.authors else '—' }}</td>
+  <td>{{ analysis.publication_date or '—' }}</td>
+  <td class="text-truncate" style="max-width: 360px;"
+      title="{{ analysis.summary or '' }}">
+    {{ analysis.summary or '—' }}
+  </td>
+  <td>
+    {% if analysis.cybersecurity_area %}
+      {% for a in analysis.cybersecurity_area[:3] %}
+        <span class="badge bg-info text-dark me-1">{{ a }}</span>
+      {% endfor %}
+      {% if analysis.cybersecurity_area | length > 3 %}
+        <span class="badge bg-secondary">+{{ analysis.cybersecurity_area | length - 3 }}</span>
+      {% endif %}
+    {% else %}
+      —
+    {% endif %}
+  </td>
+  <td class="text-truncate" style="max-width: 360px;"
+      title="{{ analysis.proposed_solution or '' }}">
+    {{ analysis.proposed_solution or '—' }}
+  </td>
+</tr>

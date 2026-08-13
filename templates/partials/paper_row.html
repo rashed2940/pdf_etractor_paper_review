@@ -10,14 +10,14 @@
   </td>
   <td>{{ analysis.authors | join(', ') if analysis.authors else '—' }}</td>
   <td>{{ analysis.publication_date or '—' }}</td>
-  <td class="text-truncate" style="max-width: 360px;"
+  <td class="paper-summary"
       title="{{ analysis.summary or '' }}">
     {{ analysis.summary or '—' }}
   </td>
-  <td>
+  <td class="paper-area">
     {% if analysis.cybersecurity_area %}
       {% for a in analysis.cybersecurity_area[:3] %}
-        <span class="badge bg-info text-dark me-1">{{ a }}</span>
+        <span class="badge bg-info text-dark me-1 mb-1">{{ a }}</span>
       {% endfor %}
       {% if analysis.cybersecurity_area | length > 3 %}
         <span class="badge bg-secondary">+{{ analysis.cybersecurity_area | length - 3 }}</span>
@@ -26,7 +26,7 @@
       —
     {% endif %}
   </td>
-  <td class="text-truncate" style="max-width: 360px;"
+  <td class="paper-solution"
       title="{{ analysis.proposed_solution or '' }}">
     {{ analysis.proposed_solution or '—' }}
   </td>

@@ -41,6 +41,7 @@ tiktoken>=0.7.0,<1.0.0          # accurate token counting for chunker
 
 # --- Utilities ---
 typing-extensions>=4.10.0
+openpyxl>=3.1.0,<4.0.0   # Excel export of analyzed papers
 
 # --- Dev / testing ---
 pytest>=8.0.0,<9.0.0

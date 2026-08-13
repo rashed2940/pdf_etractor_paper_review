@@ -18,7 +18,6 @@
         <ul class="navbar-nav me-auto">
           <li class="nav-item"><a class="nav-link" href="{{ url_for('index') }}">Upload</a></li>
           <li class="nav-item"><a class="nav-link" href="{{ url_for('results_page') }}">Results</a></li>
-          <li class="nav-item"><a class="nav-link" href="{{ url_for('question') }}">Ask</a></li>
         </ul>
       </div>
     </div>
@@ -30,7 +29,10 @@
 
   <footer class="container mt-5 mb-4 text-muted small">
     <hr>
-    Cybersecurity Paper Analyzer · AGENTS.md §41 — Accuracy, Traceability, Grounded answers.
+    <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <span>Cybersecurity Paper Analyzer · AGENTS.md §41 — Accuracy, Traceability, Grounded answers.</span>
+      <span>Created by <strong class="text-body">Sk Rashed Bin Mohammad</strong></span>
+    </div>
   </footer>
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>

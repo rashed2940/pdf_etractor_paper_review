@@ -19,9 +19,11 @@ Security (AGENTS.md §31):
 """
 from __future__ import annotations
 
+import io
 import os
 import threading
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,7 @@ from flask import (
     jsonify,
     render_template,
     request,
+    send_file,
     url_for,
 )
 from werkzeug.utils import secure_filename
@@ -366,12 +369,122 @@ def create_app(*, llm_factory=None) -> Flask:
             "results.html",
             results_url=url_for("results_page"),
             question_url=url_for("question"),
+            export_url=url_for("export_excel"),
         )
 
     @app.route("/api/papers")
     def api_papers():
         """REST: list all analyzed papers."""
         return jsonify([p.model_dump(mode="json") for p in results.all()])
+
+    @app.route("/export/excel")
+    def export_excel():
+        """Download the analyzed papers table as a single .xlsx file.
+
+        Includes ALL rows currently in the results store, with the FULL
+        untruncated text for every column. The file is built in memory
+        via openpyxl and streamed to the browser as an attachment.
+        """
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.utils import get_column_letter
+
+        papers = results.all()
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Analyzed Papers"
+
+        # Columns: full content, no truncation. Lists are joined with
+        # newlines so multi-author / multi-area cells stay readable.
+        headers = [
+            ("Paper ID",        lambda p: p.paper_id),
+            ("Title",           lambda p: p.title or ""),
+            ("Authors",         lambda p: ", ".join(p.authors) if p.authors else ""),
+            ("Published",       lambda p: p.publication_date or ""),
+            ("Filename",        lambda p: p.filename or ""),
+            ("Cybersecurity Area",
+                                lambda p: ", ".join(p.cybersecurity_area) if p.cybersecurity_area else ""),
+            ("Summary",         lambda p: p.summary or ""),
+            ("Problem Statement", lambda p: p.problem_statement or ""),
+            ("Proposed Solution",  lambda p: p.proposed_solution or ""),
+            ("Methodology",     lambda p: p.methodology or ""),
+            ("Datasets",        lambda p: ", ".join(p.datasets) if p.datasets else ""),
+            ("Key Results",     lambda p: p.key_results or ""),
+            ("Limitations",     lambda p: p.limitations or ""),
+            ("Analysis Status", lambda p: p.analysis_status),
+            ("Analysis Error",  lambda p: p.analysis_error or ""),
+            ("Created At",      lambda p: p.created_at.isoformat() if p.created_at else ""),
+        ]
+
+        # Header row
+        header_fill = PatternFill(start_color="FF2C3E50", end_color="FF2C3E50", fill_type="solid")
+        header_font = Font(bold=True, color="FFFFFFFF")
+        for col_idx, (name, _) in enumerate(headers, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=name)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="left", vertical="center")
+
+        # Data rows
+        wrap_align = Alignment(wrap_text=True, vertical="top", horizontal="left")
+        for row_idx, paper in enumerate(papers, start=2):
+            for col_idx, (_, getter) in enumerate(headers, start=1):
+                ws.cell(row=row_idx, column=col_idx, value=getter(paper)).alignment = wrap_align
+
+        # Column widths — give long-text columns plenty of room.
+        widths = {
+            "Paper ID": 18,
+            "Title": 40,
+            "Authors": 28,
+            "Published": 12,
+            "Filename": 28,
+            "Cybersecurity Area": 26,
+            "Summary": 60,
+            "Problem Statement": 40,
+            "Proposed Solution": 50,
+            "Methodology": 40,
+            "Datasets": 28,
+            "Key Results": 50,
+            "Limitations": 40,
+            "Analysis Status": 14,
+            "Analysis Error": 30,
+            "Created At": 22,
+        }
+        for col_idx, (name, _) in enumerate(headers, start=1):
+            ws.column_dimensions[get_column_letter(col_idx)].width = widths.get(name, 20)
+
+        # Header row taller, freeze so the header stays visible while scrolling
+        ws.row_dimensions[1].height = 24
+        ws.freeze_panes = "A2"
+
+        # Build filename like `analyzed_papers_20260813_123045.xlsx`
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        filename = f"analyzed_papers_{stamp}.xlsx"
+        logger.info("Excel export: %d papers, filename=%s", len(papers), filename)
+        return send_file(
+            buf,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    @app.route("/api/export")
+    def api_export():
+        """REST: JSON alias of the Excel export metadata.
+
+        Returns how many papers would be exported and the next-call
+        URL — useful for clients that want to confirm there is data
+        before triggering the actual download.
+        """
+        return jsonify(
+            {
+                "count": len(results.all()),
+                "download_url": url_for("export_excel"),
+            }
+        )
 
     @app.route("/api/papers/<paper_id>", methods=["DELETE"])
     def api_delete_paper(paper_id: str):

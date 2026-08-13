@@ -8,7 +8,7 @@
 </p>
 
 <div class="row mb-3 g-2">
-  <div class="col-md-6">
+  <div class="col-md-5">
     <input type="search" id="table-search" class="form-control" placeholder="Search by title, authors, summary, area…">
   </div>
   <div class="col-md-3">
@@ -16,7 +16,10 @@
       <option value="">All cybersecurity areas</option>
     </select>
   </div>
-  <div class="col-md-3 text-end">
+  <div class="col-md-4 text-end">
+    <a class="btn btn-success me-2" href="{{ export_url }}" title="Download all analyzed papers as a single .xlsx file">
+      ⬇ Export to Excel
+    </a>
     <a class="btn btn-outline-secondary" href="{{ results_url }}">Refresh</a>
   </div>
 </div>
@@ -28,9 +31,9 @@
         <th scope="col" role="button" data-sort="title">Title</th>
         <th scope="col" role="button" data-sort="authors">Authors</th>
         <th scope="col" role="button" data-sort="publication_date">Published</th>
-        <th scope="col">Summary</th>
-        <th scope="col">Cyber Area</th>
-        <th scope="col">Solution</th>
+        <th scope="col" class="paper-summary-col">Summary</th>
+        <th scope="col" class="paper-area-col">Cyber Area</th>
+        <th scope="col" class="paper-solution-col">Solution</th>
         <th scope="col" class="text-end" style="width: 110px;">Actions</th>
       </tr>
     </thead>

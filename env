@@ -1,0 +1,92 @@
+# ============================================================================
+# Cybersecurity Paper RAG — Environment Configuration
+# Copy to .env and customize. Never commit .env.
+# ============================================================================
+
+# ===== LLM (general: chat / analysis / summarization) =====
+# We use the native `ollama` Python package (see llm/ollama_client.py).
+LLM_PROVIDER=ollama
+# Default: qwen2.5-coder:7b-instruct. Verified to respond quickly to
+# the JSON-formatted prompts our agents send (each agent's response
+# completes in seconds, not minutes). Reasoning models like qwen3.x
+# and deepseek-r1 are auto-detected (by name pattern) and get
+# think=False passed automatically so they don't burn their output
+# budget on internal chain-of-thought.
+#
+# SPEED GUIDE (from smoke tests on this machine):
+#   qwen2.5-coder:7b-instruct  ~30s / agent    ✅ recommended (default)
+#   llama3.1:8b                ~10s / agent    ✅ fastest
+#   gemma3:4b                  ~5min / agent   ⚠️ too slow for our agents
+#   qwen3.x                    hangs without think=False (auto-fixed)
+LLM_MODEL=llama3.1:8b
+OLLAMA_BASE_URL=http://localhost:11434
+OPENAI_API_KEY=
+OPENAI_BASE_URL=
+TEMPERATURE=0
+# Hard timeout (seconds) for a single LLM chat call. If Ollama doesn't
+# respond in this time, the call fails with a clear TimeoutError and
+# the affected agent gives up immediately (no retries). Default: 300s
+# (5 min) — long enough for our 4-5K-token agent prompts to complete
+# on typical CPU/consumer-GPU hardware. Lower for faster fail-fast on
+# small prompts; raise for very slow hardware or longer contexts.
+LLM_TIMEOUT_SECONDS=300
+# Hard cap on output tokens per call (forwarded as Ollama's num_predict).
+# Prevents runaway generations. Default: 2048. Raise via LLM_NUM_PREDICT
+# if your agents genuinely need longer answers.
+LLM_NUM_PREDICT=2048
+# ----- Alternative models (swap by changing LLM_MODEL) -----
+# LLM_MODEL=qwen2.5-coder:14b-instruct    # strong code/JSON output (must be pulled)
+# LLM_MODEL=qwen2.5-coder:7b-instruct     # default; fast + reliable JSON
+# LLM_MODEL=llama3.1:8b                   # Meta's Llama 3.1 8B
+# LLM_MODEL=gemma3:4b                     # Google's small general model
+# LLM_MODEL=qwen3.5:4b                    # reasoning model — auto-detected
+# LLM_MODEL=deepseek-r1:7b                # reasoning model — auto-detected
+
+# ===== Specialized LLM roles (override per-task models) =====
+# Set any of these to override LLM_MODEL for that role.
+# Leave empty to fall back to LLM_MODEL.
+LLM_MODEL_SUMMARIZATION=
+LLM_MODEL_CYBERSECURITY=
+LLM_MODEL_SOLUTION=
+LLM_MODEL_METADATA=
+LLM_MODEL_QA=
+
+# ===== Embeddings =====
+# Default: native Ollama embeddings via the `ollama` Python package.
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=embeddinggemma:latest
+# ----- Alternative providers (uncomment + edit to switch) -----
+# EMBEDDING_PROVIDER=sentence_transformers
+# EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2   # 384-dim, CPU-friendly
+# EMBEDDING_PROVIDER=openai
+# EMBEDDING_MODEL=text-embedding-3-small
+# OPENAI_EMBEDDING_API_KEY=
+# ----- Alternative Ollama embedding models -----
+# EMBEDDING_MODEL=nomic-embed-text
+# EMBEDDING_MODEL=mxbai-embed-large
+# EMBEDDING_MODEL=all-minilm
+
+# ===== RAG =====
+TOP_K=5
+SCORE_THRESHOLD=0.0
+
+# ===== Chunking =====
+CHUNK_SIZE=1200
+CHUNK_OVERLAP=300
+
+# ===== Storage =====
+CHROMA_PERSIST_DIRECTORY=./data/chroma
+UPLOAD_DIRECTORY=./data/uploads
+SQLITE_PATH=./data/app.sqlite
+
+# ===== OCR (opt-in) =====
+OCR_ENABLED=false
+OCR_MIN_CHARS_PER_PAGE=50
+TESSERACT_CMD=
+
+# ===== Flask =====
+MAX_UPLOAD_MB=50
+SECRET_KEY=change-me
+
+# ===== Logging =====
+LOG_LEVEL=INFO

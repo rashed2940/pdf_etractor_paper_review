@@ -8,6 +8,7 @@ from __future__ import annotations
 from textwrap import dedent
 
 from models.paper import AgentContext, SummaryResult
+from rag.prompts import SOURCE_SCHEMA
 from agents.base import BaseAgent
 
 
@@ -49,8 +50,9 @@ class SummaryAgent(BaseAgent):
               "CICIDS2017").
             - The `summary` field should be 100–250 words.
             - Use null for fields you cannot determine.
+            - Cite sources using the schema below.
             """
-        ).strip()
+        ).strip() + "\n\n" + SOURCE_SCHEMA
 
     def user_prompt(self, context: AgentContext) -> str:
         chunks_text = "\n\n---\n\n".join(

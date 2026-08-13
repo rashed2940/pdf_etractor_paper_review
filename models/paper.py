@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # ============================================================================
@@ -23,13 +23,41 @@ from pydantic import BaseModel, ConfigDict, Field
 class SourceReference(BaseModel):
     """A single citation pointing to a chunk in a paper."""
 
-    model_config = ConfigDict(frozen=False, extra="forbid")
+    model_config = ConfigDict(frozen=False, extra="ignore", populate_by_name=True)
 
-    paper_id: str = Field(..., description="Stable identifier for the paper.")
+    paper_id: str = Field(default="", description="Stable identifier for the paper.")
     page: int | None = Field(default=None, description="1-based page number, if known.")
     section: str | None = Field(default=None, description="Section name (e.g. 'Methodology').")
     chunk_id: str | None = Field(default=None, description="Stable chunk identifier.")
     text: str | None = Field(default=None, description="Short excerpt supporting the claim.")
+    # Common LLM-emitted aliases — accepted but always read into `text`
+    # in the validator below, so the rest of the code only ever sees
+    # the canonical field.
+    content: str | None = Field(default=None, exclude=True)
+    excerpt: str | None = Field(default=None, exclude=True)
+    quote: str | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_aliases(cls, data: Any) -> Any:
+        """Accept the field aliases LLMs commonly invent (content,
+        excerpt, quote) and copy them into `text`. Also accept `page_number`
+        as an alias for `page`. Any other unexpected keys are dropped
+        silently (extra='ignore') so a single bad source doesn't fail
+        the whole agent output."""
+        if not isinstance(data, dict):
+            return data
+        # text <- content / excerpt / quote (first non-empty wins)
+        if not data.get("text"):
+            for alias in ("content", "excerpt", "quote"):
+                v = data.get(alias)
+                if v:
+                    data["text"] = v
+                    break
+        # page <- page_number
+        if data.get("page") is None and data.get("page_number") is not None:
+            data["page"] = data["page_number"]
+        return data
 
 
 class RetrievedChunk(BaseModel):
@@ -45,6 +73,14 @@ class RetrievedChunk(BaseModel):
     section: str | None = None
     text: str
     score: float | None = Field(default=None, description="Similarity score (0..1).")
+    # Pre-extracted paper-level metadata (optional). When present,
+    # Coordinator._build_context uses these so analysis agents see
+    # bibliographic fields without re-deriving them from chunk text.
+    authors: list[str] | None = None
+    publication_date: str | None = None
+    venue: str | None = None
+    doi: str | None = None
+    institution: str | None = None
 
 
 # ============================================================================
@@ -191,6 +227,11 @@ class PaperAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     paper_id: str
+    filename: str | None = Field(
+        default=None,
+        description="Original PDF filename. Used by the UI to correlate "
+        "freshly-uploaded papers with their analysis result.",
+    )
     title: str | None = None
     authors: list[str] = Field(default_factory=list)
     publication_date: str | None = None

@@ -132,7 +132,9 @@ def ingest_pdf(
     # Clean each page (preserves page numbers).
     cleaned = clean_pages((p.page_number, p.text) for p in doc.pages)
     first_page_text = cleaned[0][1] if cleaned else ""
-    metadata = extract_metadata(doc.metadata, first_page_text)
+    metadata = extract_metadata(
+        doc.metadata, first_page_text, filename=path.name
+    )
     metadata["sha256"] = sha
     metadata["page_count"] = doc.page_count
 
@@ -147,6 +149,7 @@ def ingest_pdf(
         chunks,
         filename=path.name,
         title=metadata.get("title"),
+        metadata=metadata,
     )
 
     logger.info(

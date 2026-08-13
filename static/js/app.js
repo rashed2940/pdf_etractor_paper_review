@@ -59,89 +59,146 @@
             const maxAttempts = 600; // ~10 minutes at 1s cadence
             const tick = async () => {
                 attempts++;
+                let data = null;
                 try {
                     const r = await fetch(statusUrl);
-                    const data = await r.json();
-                    renderChips(panelEl, data.papers);
-                    const allDone = Object.values(data.papers).every(
-                        (s) => s.state === "done" || s.state === "failed"
-                    );
-                    if (!allDone && attempts < maxAttempts) {
-                        setTimeout(tick, 1000);
-                    } else if (allDone) {
-                        // Cross-reference with the analyzed-papers endpoint so
-                        // the user only sees "View results" when something
-                        // actually got persisted to the library.
-                        try {
-                            const papersResp = await fetch("/api/papers");
-                            const papers = papersResp.ok
-                                ? await papersResp.json()
-                                : [];
-                            const filenames = Object.values(data.papers).map(
-                                (s) => s.filename
+                    data = await r.json();
+                } catch (err) {
+                    // Network/transient failure (e.g. user reloaded the page,
+                    // browser interrupted the request, Flask restarted briefly).
+                    // Don't nuke the panel — show a retry hint instead and
+                    // keep trying with backoff up to maxAttempts.
+                    const retryIn = Math.min(2000 + attempts * 500, 10000);
+                    panelEl.innerHTML = `
+                        <span class="text-warning small">
+                            Polling interrupted: ${escapeHtml(String(err))}.
+                            Retrying in ${Math.round(retryIn / 1000)}s…
+                        </span>`;
+                    if (attempts < maxAttempts) {
+                        setTimeout(tick, retryIn);
+                    }
+                    return;
+                }
+                renderChips(panelEl, data.papers);
+                const allDone = Object.values(data.papers).every(
+                    (s) => s.state === "done" || s.state === "failed"
+                );
+                if (!allDone && attempts < maxAttempts) {
+                    setTimeout(tick, 1000);
+                } else if (allDone) {
+                    // Cross-reference with the analyzed-papers endpoint so
+                    // the user only sees "View results" when something
+                    // actually got persisted to the library.
+                    try {
+                        const papersResp = await fetch("/api/papers");
+                        const papers = papersResp.ok
+                            ? await papersResp.json()
+                            : [];
+                        // The registry's `paper_id` is the sanitized
+                        // filename; the analysis row stores the *post-
+                        // collision-suffix* filename (e.g. "paper_<uuid>"
+                        // for paper_id, "name_49de7e.pdf" for filename).
+                        // We match by:
+                        //   1. exact filename equality (when no collision)
+                        //   2. same "stem" up to 30 chars (handles the
+                        //      `_49de7e` collision suffix)
+                        //   3. paper_id directly registered as a name
+                        const registryPaperIds = Object.keys(data.papers || {});
+                        const registryFilenames = Object.values(data.papers)
+                            .map((s) => (s && s.filename) || "")
+                            .filter(Boolean);
+                        const stripCollisionSuffix = (name) => {
+                            // Match patterns like "name_49de7e.pdf" or
+                            // "name_a1b2c3.pdf" — strip "_<6 hex>.pdf".
+                            return (name || "").replace(
+                                /_[a-f0-9]{4,8}\.(pdf)$/i,
+                                ".$1"
                             );
-                            const matched = papers.filter(
-                                (p) =>
-                                    filenames.some(
+                        };
+                        const stemOf = (name) =>
+                            stripCollisionSuffix(name).replace(/\.[^.]+$/, "");
+                        const matched = papers.filter((p) => {
+                            if (!p) return false;
+                            // 1. Exact paper_id equality (rare, but cheap)
+                            if (
+                                p.paper_id &&
+                                registryPaperIds.includes(p.paper_id)
+                            ) {
+                                return true;
+                            }
+                            // 2. Filename match (with/without collision)
+                            if (p.filename && registryFilenames.length) {
+                                const pStem = stemOf(p.filename);
+                                if (
+                                    registryFilenames.some(
                                         (f) =>
-                                            f &&
-                                            p.paper_id &&
-                                            (p.paper_id.includes(f.slice(0, 12)) ||
-                                                (p.filename || "") === f)
+                                            f === p.filename ||
+                                            stemOf(f) === pStem
                                     )
-                            );
-                            const failed = Object.values(data.papers).filter(
-                                (s) => s.state === "failed"
-                            );
-                            if (matched.length > 0) {
-                                panelEl.insertAdjacentHTML(
-                                    "beforeend",
-                                    '<div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/results">View results →</a></div>'
-                                );
-                            } else if (failed.length === Object.values(data.papers).length) {
-                                panelEl.insertAdjacentHTML(
-                                    "beforeend",
-                                    '<div class="mt-2 text-danger small">All files failed to process. Check the logs for details.</div>'
-                                );
-                            } else {
-                                const clearBtnId = "clear-stuck-" + Math.random().toString(36).slice(2, 8);
-                                panelEl.insertAdjacentHTML(
-                                    "beforeend",
-                                    `<div class="mt-2 text-warning small">
-                                        ⚠ Processing finished but no analysis result was saved.
-                                        Try re-uploading, or check the application logs.
-                                        ${uploadId ? `<button id="${clearBtnId}" class="btn btn-sm btn-link p-0 ms-2">Clear this chip</button>` : ""}
-                                    </div>`
-                                );
-                                if (uploadId) {
-                                    document
-                                        .getElementById(clearBtnId)
-                                        ?.addEventListener("click", async () => {
-                                            try {
-                                                await fetch(
-                                                    `/api/uploads/${encodeURIComponent(uploadId)}`,
-                                                    { method: "DELETE" }
-                                                );
-                                                panelEl.innerHTML =
-                                                    '<span class="text-muted">Cleared.</span>';
-                                            } catch (e) {
-                                                alert("Could not clear: " + e);
-                                            }
-                                        });
+                                ) {
+                                    return true;
                                 }
                             }
-                        } catch (e) {
-                            // /api/papers failed — still show the link
+                            // 3. paper_id appears in registry filenames
+                            //    (legacy shape — registry uses sanitized
+                            //    filename as paper_id).
+                            if (
+                                p.paper_id &&
+                                registryFilenames.some((f) =>
+                                    f.startsWith(p.paper_id)
+                                )
+                            ) {
+                                return true;
+                            }
+                            return false;
+                        });
+                        const failed = Object.values(data.papers).filter(
+                            (s) => s.state === "failed"
+                        );
+                        if (matched.length > 0) {
                             panelEl.insertAdjacentHTML(
                                 "beforeend",
                                 '<div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/results">View results →</a></div>'
                             );
+                        } else if (failed.length === Object.values(data.papers).length) {
+                            panelEl.insertAdjacentHTML(
+                                "beforeend",
+                                '<div class="mt-2 text-danger small">All files failed to process. Check the logs for details.</div>'
+                            );
+                        } else {
+                            const clearBtnId = "clear-stuck-" + Math.random().toString(36).slice(2, 8);
+                            panelEl.insertAdjacentHTML(
+                                "beforeend",
+                                `<div class="mt-2 text-warning small">
+                                    ⚠ Processing finished but no analysis result was saved.
+                                    Try re-uploading, or check the application logs.
+                                    ${uploadId ? `<button id="${clearBtnId}" class="btn btn-sm btn-link p-0 ms-2">Clear this chip</button>` : ""}
+                                </div>`
+                            );
+                            if (uploadId) {
+                                document
+                                    .getElementById(clearBtnId)
+                                    ?.addEventListener("click", async () => {
+                                        try {
+                                            await fetch(
+                                                `/api/uploads/${encodeURIComponent(uploadId)}`,
+                                                { method: "DELETE" }
+                                            );
+                                            panelEl.innerHTML =
+                                                '<span class="text-muted">Cleared.</span>';
+                                        } catch (e) {
+                                            alert("Could not clear: " + e);
+                                        }
+                                    });
+                            }
                         }
+                    } catch (e) {
+                        // /api/papers failed — still show the link
+                        panelEl.insertAdjacentHTML(
+                            "beforeend",
+                            '<div class="mt-2"><a class="btn btn-sm btn-outline-primary" href="/results">View results →</a></div>'
+                        );
                     }
-                } catch (err) {
-                    panelEl.innerHTML = `<span class="text-danger">Polling failed: ${escapeHtml(
-                        String(err)
-                    )}</span>`;
                 }
             };
             tick();
@@ -482,6 +539,8 @@
     const healthIndicator = document.getElementById("llm-health-indicator");
     const unavailableBanner = document.getElementById("llm-unavailable-banner");
     const errorDetail = document.getElementById("llm-error-detail");
+    const slowBanner = document.getElementById("llm-slow-banner");
+    const slowDetail = document.getElementById("llm-slow-detail");
     if (healthIndicator) {
         // Ping with a 20s client-side timeout; the server enforces its own
         // (LLM_TIMEOUT_SECONDS) timeout but we don't want the user staring
@@ -497,6 +556,17 @@
                     healthIndicator.classList.remove("text-muted");
                     healthIndicator.classList.add("text-success");
                     if (unavailableBanner) unavailableBanner.classList.add("d-none");
+                    // Warn the user if the model is too slow for analysis.
+                    if (data.speed === "slow") {
+                        if (slowBanner) slowBanner.classList.remove("d-none");
+                        if (slowDetail) {
+                            slowDetail.textContent =
+                                `Probe took ${data.latency_seconds}s — ` +
+                                `4 analysis agents will likely time out.`;
+                        }
+                    } else if (slowBanner) {
+                        slowBanner.classList.add("d-none");
+                    }
                 } else {
                     healthIndicator.textContent = "✗ unreachable";
                     healthIndicator.classList.remove("text-muted");

@@ -9,6 +9,7 @@ from __future__ import annotations
 from textwrap import dedent
 
 from models.paper import AgentContext, MetadataResult
+from rag.prompts import SOURCE_SCHEMA
 from agents.base import BaseAgent
 
 
@@ -46,8 +47,9 @@ class MetadataAgent(BaseAgent):
             - DOIs look like "10.xxxx/yyyy".
             - Do not fabricate fields. If unsure, use null.
             - Preserve the spelling of author names exactly as written.
+            - Cite sources using the schema below.
             """
-        ).strip()
+        ).strip() + "\n\n" + SOURCE_SCHEMA
 
     def user_prompt(self, context: AgentContext) -> str:
         # Prefer any pre-extracted metadata; then the retrieved chunks.

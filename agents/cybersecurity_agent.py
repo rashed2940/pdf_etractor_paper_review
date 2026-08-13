@@ -13,6 +13,7 @@ from models.paper import (
     CYBERSECURITY_TAXONOMY,
     CybersecurityResult,
 )
+from rag.prompts import SOURCE_SCHEMA
 from agents.base import BaseAgent
 
 
@@ -53,8 +54,9 @@ class CybersecurityAgent(BaseAgent):
               paper (e.g. "the paper proposes a CNN-LSTM for IoT intrusion
               detection").
             - Do not speculate beyond what the excerpts support.
+            - Cite sources using the schema below.
             """
-        ).strip()
+        ).strip() + "\n\n" + SOURCE_SCHEMA
 
     def user_prompt(self, context: AgentContext) -> str:
         chunks_text = "\n\n---\n\n".join(

@@ -138,6 +138,30 @@ REFUSAL_SENTINEL = (
 )
 
 
+# ============================================================================
+# Source-citation schema — shared by all 4 analysis agents.
+# Included verbatim in every agent's system prompt so the LLM emits
+# a stable shape (paper_id, page, section, text) and we don't have to
+# recover from invented aliases like {"content": "..."}.
+# ============================================================================
+SOURCE_SCHEMA = dedent(
+    """
+    Source-citation schema (for any "sources" array in your output):
+      Each source is an object with these EXACT field names:
+        {
+          "paper_id": "<string, the paper_id from context>",
+          "page":     <integer or null, 1-based page number>,
+          "section":  "<string or null, e.g. 'Methodology'>",
+          "text":     "<string, a short excerpt (≤ 30 words) from that page>"
+        }
+      Do NOT use "content", "excerpt", "quote", "page_number" or any
+      other key. Only "text" is accepted for the excerpt.
+      If you cannot determine page or section, use null.
+      If you don't cite a specific excerpt, omit the source.
+    """
+).strip()
+
+
 __all__ = [
     "INJECTION_GUARD",
     "QA_SYSTEM_PROMPT",

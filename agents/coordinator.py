@@ -109,7 +109,13 @@ class Coordinator:
 
             context = self._build_context(paper_id, chunks)
             results = self._run_agents_parallel(context)
-            merged = self._merge_results(paper_id, results)
+            # Propagate filename to the analysis so /api/papers
+            # consumers (and the UI) can correlate a result with the
+            # original uploaded PDF.
+            filename = chunks[0].filename if chunks else None
+            merged = self._merge_results(
+                paper_id, results, context.metadata, filename=filename
+            )
             logger.info(
                 "Coordinator: paper_id=%s analyzed (sources=%d)",
                 paper_id,
@@ -156,9 +162,21 @@ class Coordinator:
             docs = docs[:top_k]
             metas = metas[:top_k]
         chunks: list[RetrievedChunk] = []
+        import json as _json
         for cid, doc, meta in zip(ids, docs, metas):
             meta = meta or {}
             page_val = meta.get("page")
+            # Decode JSON-encoded authors list back to a list.
+            authors_raw = meta.get("authors")
+            authors: list[str] | None = None
+            if isinstance(authors_raw, str):
+                try:
+                    decoded = _json.loads(authors_raw)
+                    authors = decoded if isinstance(decoded, list) else None
+                except (ValueError, TypeError):
+                    authors = None
+            elif isinstance(authors_raw, list):
+                authors = authors_raw
             chunks.append(
                 RetrievedChunk(
                     chunk_id=cid,
@@ -169,6 +187,11 @@ class Coordinator:
                     section=meta.get("section") or None,
                     text=doc,
                     score=None,
+                    authors=authors,
+                    publication_date=meta.get("publication_date"),
+                    venue=meta.get("venue"),
+                    doi=meta.get("doi"),
+                    institution=meta.get("institution"),
                 )
             )
         return chunks
@@ -176,11 +199,28 @@ class Coordinator:
     def _build_context(
         self, paper_id: str, chunks: list[RetrievedChunk]
     ) -> AgentContext:
-        """Build a shared AgentContext for all four agents."""
-        # Best-effort pre-extracted metadata: title from first chunk if any.
+        """Build a shared AgentContext for all four agents.
+
+        Pre-extracted metadata from each chunk (title, authors,
+        publication_date, venue, doi, institution) is propagated so
+        analysis agents can see bibliographic fields without having to
+        re-derive them from chunk text. We dedupe across chunks so the
+        first non-empty value wins.
+        """
         pre_meta: dict[str, Any] = {}
-        if chunks and chunks[0].title:
-            pre_meta["title"] = chunks[0].title
+        if chunks:
+            first = chunks[0]
+            for attr in (
+                "title",
+                "authors",
+                "publication_date",
+                "venue",
+                "doi",
+                "institution",
+            ):
+                val = getattr(first, attr, None)
+                if val:  # truthy check covers None, "", [], etc.
+                    pre_meta[attr] = val
         return AgentContext(
             paper_id=paper_id,
             retrieved_chunks=chunks,
@@ -225,13 +265,23 @@ class Coordinator:
         return results
 
     def _merge_results(
-        self, paper_id: str, results: dict[str, Any]
+        self, paper_id: str, results: dict[str, Any],
+        pre_meta: dict[str, Any] | None = None,
+        *,
+        filename: str | None = None,
     ) -> PaperAnalysis:
-        """Merge per-agent results into a single PaperAnalysis."""
+        """Merge per-agent results into a single PaperAnalysis.
+
+        `pre_meta` is the pre-extracted metadata from PDF parsing +
+        heuristics. Any field that the LLM extracted as None / []
+        is filled in from `pre_meta` so we never lose bibliographic
+        info that the small local model may have missed.
+        """
         meta = results.get("metadata")
         cyber = results.get("cybersecurity")
         sol = results.get("solution")
         summary = results.get("summary")
+        pre_meta = pre_meta or {}
 
         # Deduplicated sources across all agents.
         sources: list[SourceReference] = []
@@ -246,11 +296,28 @@ class Coordinator:
                 seen.add(key)
                 sources.append(src)
 
+        def _first(*candidates: Any) -> Any:
+            """Return the first truthy candidate."""
+            for c in candidates:
+                if c:  # covers None, "", [], etc.
+                    return c
+            return None
+
         return PaperAnalysis(
             paper_id=paper_id,
-            title=getattr(meta, "title", None) if meta else None,
-            authors=getattr(meta, "authors", []) if meta else [],
-            publication_date=getattr(meta, "publication_date", None) if meta else None,
+            filename=filename,
+            title=_first(
+                getattr(meta, "title", None) if meta else None,
+                pre_meta.get("title"),
+            ),
+            authors=_first(
+                getattr(meta, "authors", []) if meta else [],
+                pre_meta.get("authors") or [],
+            ) or [],
+            publication_date=_first(
+                getattr(meta, "publication_date", None) if meta else None,
+                pre_meta.get("publication_date"),
+            ),
             summary=getattr(summary, "summary", None) if summary else None,
             cybersecurity_area=getattr(cyber, "areas", []) if cyber else [],
             problem_statement=getattr(sol, "problem_statement", None) if sol else None,

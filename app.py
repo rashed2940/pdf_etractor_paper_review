@@ -314,10 +314,20 @@ def create_app(*, llm_factory=None) -> Flask:
     def api_llm_status():
         """Quick health check: ping the configured LLM with a trivial prompt.
 
-        Returns `{ok: true, latency_seconds: N}` on success, or
-        `{ok: false, error: "..."}` on any failure (timeout, connection
-        refused, model not found, etc.). Use this from the UI to warn
-        users BEFORE they upload if their LLM is broken.
+        Returns `{ok: true, latency_seconds: N, speed: "fast"|"ok"|"slow"}`
+        on success, or `{ok: false, error: "..."}` on any failure
+        (timeout, connection refused, model not found, etc.). Use this
+        from the UI to warn users BEFORE they upload if their LLM is
+        broken or unusably slow.
+
+        Speed thresholds (from smoke tests on this machine):
+            fast:  < 20s   -> typical for qwen3.x, qwen2.5-coder, llama3.1
+            ok:    20-60s  -> slower hardware / first-call load penalty
+            slow:  > 60s   -> gemma3:4b on long prompts; analysis will time out
+
+        We deliberately use generous thresholds so the UI only flags
+        truly broken models — `qwen2.5-coder:7b-instruct` taking 30s
+        for a probe is normal, not a problem.
         """
         import time
         try:
@@ -331,8 +341,19 @@ def create_app(*, llm_factory=None) -> Flask:
                 [{"role": "user", "content": "Reply with the single word OK."}]
             )
             elapsed = round(time.time() - start, 2)
+            if elapsed < 20:
+                speed = "fast"
+            elif elapsed < 60:
+                speed = "ok"
+            else:
+                speed = "slow"
             return jsonify(
-                {"ok": True, "latency_seconds": elapsed, "model": model_name}
+                {
+                    "ok": True,
+                    "latency_seconds": elapsed,
+                    "model": model_name,
+                    "speed": speed,
+                }
             )
         except Exception as exc:  # noqa: BLE001
             return jsonify(

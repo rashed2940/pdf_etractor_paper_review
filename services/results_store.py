@@ -24,6 +24,7 @@ logger = get_logger(__name__)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS paper_analyses (
     paper_id TEXT PRIMARY KEY,
+    filename TEXT,
     title TEXT,
     authors TEXT,           -- JSON array
     publication_date TEXT,
@@ -46,6 +47,7 @@ CREATE TABLE IF NOT EXISTS paper_analyses (
 def _analysis_to_row(a: PaperAnalysis) -> dict[str, Any]:
     return {
         "paper_id": a.paper_id,
+        "filename": a.filename,
         "title": a.title,
         "authors": json.dumps(a.authors or []),
         "publication_date": a.publication_date,
@@ -78,6 +80,7 @@ def _analysis_to_row(a: PaperAnalysis) -> dict[str, Any]:
 def _row_to_analysis(row: sqlite3.Row) -> PaperAnalysis:
     return PaperAnalysis(
         paper_id=row["paper_id"],
+        filename=row["filename"],
         title=row["title"],
         authors=json.loads(row["authors"] or "[]"),
         publication_date=row["publication_date"],
@@ -119,8 +122,33 @@ class ResultsStore:
         )
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(_SCHEMA)
+        # Forward-only schema migrations: older DBs from before a
+        # column was added are upgraded in place. SQLite has no
+        # IF NOT EXISTS for ADD COLUMN in all versions, so we probe
+        # pragma_table_info first and only ALTER when missing.
+        self._migrate()
         self.load_from_disk()
         logger.info("ResultsStore initialized at %s", self._db_path)
+
+    def _migrate(self) -> None:
+        """Add any missing columns to an existing SQLite DB.
+
+        Cheap forward-only migrations; never destructive.
+        """
+        existing = {
+            row["name"]
+            for row in self._conn.execute(
+                "PRAGMA table_info(paper_analyses)"
+            ).fetchall()
+        }
+        if "filename" not in existing:
+            try:
+                self._conn.execute(
+                    "ALTER TABLE paper_analyses ADD COLUMN filename TEXT"
+                )
+                logger.info("Migrated paper_analyses: added 'filename' column")
+            except Exception:  # noqa: BLE001
+                pass
 
     # ------------------------------------------------- persistence
     def load_from_disk(self) -> int:
@@ -140,12 +168,12 @@ class ResultsStore:
             self._conn.execute(
                 """
                 INSERT OR REPLACE INTO paper_analyses (
-                    paper_id, title, authors, publication_date, summary,
+                    paper_id, filename, title, authors, publication_date, summary,
                     cybersecurity_area, problem_statement, proposed_solution,
                     methodology, datasets, key_results, limitations, sources,
                     analysis_status, analysis_error, created_at
                 ) VALUES (
-                    :paper_id, :title, :authors, :publication_date, :summary,
+                    :paper_id, :filename, :title, :authors, :publication_date, :summary,
                     :cybersecurity_area, :problem_statement, :proposed_solution,
                     :methodology, :datasets, :key_results, :limitations, :sources,
                     :analysis_status, :analysis_error, :created_at

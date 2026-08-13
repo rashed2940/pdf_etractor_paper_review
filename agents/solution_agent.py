@@ -9,6 +9,7 @@ from __future__ import annotations
 from textwrap import dedent
 
 from models.paper import AgentContext, SolutionResult
+from rag.prompts import SOURCE_SCHEMA
 from agents.base import BaseAgent
 
 
@@ -56,8 +57,9 @@ class SolutionAgent(BaseAgent):
             - Do not invent numbers, datasets, or models.
             - Distinguish between what the paper PROPOSES and what it
               cites as prior work.
+            - Cite sources using the schema below.
             """
-        ).strip()
+        ).strip() + "\n\n" + SOURCE_SCHEMA
 
     def user_prompt(self, context: AgentContext) -> str:
         chunks_text = "\n\n---\n\n".join(

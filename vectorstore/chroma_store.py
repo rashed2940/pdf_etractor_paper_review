@@ -69,6 +69,12 @@ class QueryHit:
     section: str | None
     text: str
     score: float | None  # 1 - distance for cosine; None when N/A
+    # Pre-extracted paper-level metadata, when present in chunk metadata.
+    authors: list[str] | None = None
+    publication_date: str | None = None
+    venue: str | None = None
+    doi: str | None = None
+    institution: str | None = None
 
 
 class ChromaVectorStore:
@@ -217,11 +223,38 @@ class ChromaVectorStore:
             pass
 
     # ------------------------------------------------------------------ Ingest
-    def add_chunks(self, chunks: Iterable[TextChunk], filename: str, title: str | None) -> int:
-        """Upsert chunks. Returns number of items added."""
+    # Metadata keys from `extract_metadata` we propagate to chunk metadata
+    # so the analysis agents can see pre-extracted values without
+    # re-extracting them from text (slower and error-prone on small LLMs).
+    _META_KEYS = ("title", "authors", "publication_date", "venue", "doi", "institution")
+
+    def add_chunks(
+        self,
+        chunks: Iterable[TextChunk],
+        filename: str,
+        title: str | None,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Upsert chunks. Returns number of items added.
+
+        Args:
+            chunks: TextChunk objects from the chunker.
+            filename: Original PDF filename.
+            title: Convenience kwarg — equivalent to metadata["title"].
+            metadata: Pre-extracted paper metadata from
+                `extract_metadata()` (title, authors, venue, doi, ...).
+                Any non-empty values are copied to every chunk's metadata
+                so the agents can see them.
+        """
         chunk_list = list(chunks)
         if not chunk_list:
             return 0
+
+        # Merge title + metadata, with metadata taking precedence on conflict.
+        merged_meta: dict[str, Any] = dict(metadata or {})
+        if title and "title" not in merged_meta:
+            merged_meta["title"] = title
 
         ids = [c.chunk_id for c in chunk_list]
         texts = [c.text for c in chunk_list]
@@ -234,8 +267,18 @@ class ChromaVectorStore:
                 "section": c.section or "",
                 "chunk_id": c.chunk_id,
             }
-            if title:
-                m["title"] = title
+            # Propagate pre-extracted metadata fields so the agents
+            # have them on hand. Serialize lists (authors) to JSON so
+            # ChromaDB's primitive-only metadata accepts them.
+            import json as _json
+            for k in self._META_KEYS:
+                v = merged_meta.get(k)
+                if v is None or v == "" or v == []:
+                    continue
+                if isinstance(v, list):
+                    m[k] = _json.dumps(v)
+                else:
+                    m[k] = v
             metadatas.append(m)
 
         embeddings = self._embedding.embed_documents(texts)
@@ -246,10 +289,11 @@ class ChromaVectorStore:
             metadatas=metadatas,
         )
         logger.info(
-            "Indexed %d chunks for paper_id=%s filename=%s",
+            "Indexed %d chunks for paper_id=%s filename=%s title=%r",
             len(chunk_list),
             chunk_list[0].paper_id,
             filename,
+            merged_meta.get("title"),
         )
         return len(chunk_list)
 
@@ -284,6 +328,7 @@ class ChromaVectorStore:
         docs = (result.get("documents") or [[]])[0]
         metas = (result.get("metadatas") or [[]])[0]
         dists = (result.get("distances") or [[]])[0]
+        import json as _json
         for chunk_id, doc, meta, dist in zip(ids, docs, metas, dists):
             # cosine distance -> cosine similarity in [0, 1] for normalized vectors
             score = 1.0 - float(dist)
@@ -291,6 +336,17 @@ class ChromaVectorStore:
                 continue
             meta = meta or {}
             page_val = meta.get("page")
+            # Decode JSON-encoded authors list back to a list.
+            authors_raw = meta.get("authors")
+            authors: list[str] | None = None
+            if isinstance(authors_raw, str):
+                try:
+                    decoded = _json.loads(authors_raw)
+                    authors = decoded if isinstance(decoded, list) else None
+                except (ValueError, TypeError):
+                    authors = None
+            elif isinstance(authors_raw, list):
+                authors = authors_raw
             hits.append(
                 QueryHit(
                     chunk_id=chunk_id,
@@ -301,6 +357,11 @@ class ChromaVectorStore:
                     section=meta.get("section") or None,
                     text=doc,
                     score=score,
+                    authors=authors,
+                    publication_date=meta.get("publication_date"),
+                    venue=meta.get("venue"),
+                    doi=meta.get("doi"),
+                    institution=meta.get("institution"),
                 )
             )
         return hits
@@ -311,16 +372,27 @@ class ChromaVectorStore:
         # Get all metadata; cap is a ChromaDB requirement.
         all_items = self._collection.get(include=["metadatas"], limit=100_000)
         seen: dict[str, dict[str, Any]] = {}
+        import json as _json
         for meta in all_items.get("metadatas") or []:
             if not meta:
                 continue
             pid = meta.get("paper_id")
             if not pid or pid in seen:
                 continue
+            # Decode JSON-encoded authors list back to a list.
+            authors = meta.get("authors")
+            if isinstance(authors, str):
+                try:
+                    authors = _json.loads(authors)
+                except (ValueError, TypeError):
+                    authors = []
             seen[pid] = {
                 "paper_id": pid,
                 "filename": meta.get("filename"),
                 "title": meta.get("title"),
+                "authors": authors or [],
+                "publication_date": meta.get("publication_date"),
+                "venue": meta.get("venue"),
             }
         return list(seen.values())
 

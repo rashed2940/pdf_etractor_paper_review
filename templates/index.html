@@ -32,6 +32,19 @@
       </small>
     </div>
 
+    <div id="llm-slow-banner" class="alert alert-warning d-none" role="alert">
+      <strong>⚠ LLM is responding slowly.</strong>
+      <span id="llm-slow-detail"></span>
+      <br>
+      <small class="text-muted">
+        The 4 analysis agents each send a long JSON-formatted prompt.
+        A slow model will time out before producing useful output.
+        Switch to a faster model in <code>.env</code> (recommended:
+        <code>qwen2.5-coder:7b-instruct</code> or
+        <code>llama3.1:8b</code>) and restart Flask.
+      </small>
+    </div>
+
     <form id="upload-form" method="post" enctype="multipart/form-data" action="{{ upload_action_url }}">
       <div class="mb-3">
         <label for="pdf-input" class="form-label">PDF files (max {{ max_upload_mb }} MB total)</label>

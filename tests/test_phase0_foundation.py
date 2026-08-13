@@ -17,12 +17,18 @@ class TestSettings:
 
         s = Settings(_env_file=None)
         assert s.llm_provider == "ollama"
-        # Default chat model is llama3.1:8b (run via the native `ollama`
-        # Python package — see llm/ollama_client.py).
-        assert s.llm_model == "llama3.1:8b"
+        # Default chat model: qwen2.5-coder:7b-instruct. Verified to
+        # respond quickly to the JSON-formatted prompts our agents send
+        # (see ollama_test/test_qwen.py for smoke testing).
+        assert s.llm_model == "qwen2.5-coder:7b-instruct"
         # Default embeddings: Ollama embeddinggemma (768-dim).
         assert s.embedding_provider == "ollama"
         assert s.embedding_model == "embeddinggemma:latest"
+        # Default per-call output cap.
+        assert s.llm_num_predict == 512
+        # Default timeout: 600s (10 min) — long enough for 3-5K-token
+        # prompts on typical CPU/consumer-GPU hardware.
+        assert s.llm_timeout_seconds == 600
 
     def test_settings_per_role_model_fallback(self):
         from config.settings import get_settings

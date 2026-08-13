@@ -30,6 +30,11 @@ wheels/
 .DS_Store
 Thumbs.db
 
+# ===== Local Ollama scratch / smoke-test scripts =====
+# Keep the user's ad-hoc ollama experiments out of version control.
+ollama_test/
+ollama/
+
 # ===== Project runtime data =====
 # All runtime data should be excluded. The directory itself is kept
 # in version control via .gitkeep so the structure is reproducible.

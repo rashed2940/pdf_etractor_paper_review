@@ -93,6 +93,11 @@ class Retriever:
                 section=hit.section,
                 text=hit.text,
                 score=hit.score,
+                authors=hit.authors,
+                publication_date=hit.publication_date,
+                venue=hit.venue,
+                doi=hit.doi,
+                institution=hit.institution,
             )
             source = SourceReference(
                 paper_id=hit.paper_id,

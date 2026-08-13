@@ -44,8 +44,13 @@ class Settings(BaseSettings):
         description="Active LLM provider. Switch to 'openai' for OpenAI-compatible APIs.",
     )
     llm_model: str = Field(
-        default="llama3.1:8b",
-        description="Default chat model. Default: llama3.1:8b (Ollama).",
+        default="qwen2.5-coder:7b-instruct",
+        description=(
+            "Default chat model. Default: qwen2.5-coder:7b-instruct "
+            "(Ollama) — verified to respond quickly to JSON-formatted "
+            "agent prompts. Reasoning models like qwen3.x and deepseek-r1 "
+            "are auto-detected and get think=False passed automatically."
+        ),
     )
     ollama_base_url: str = Field(
         default="http://localhost:11434",
@@ -63,15 +68,30 @@ class Settings(BaseSettings):
     # doesn't respond in this time, the call raises TimeoutError and
     # the affected agent fails fast (without retry). Prevents the
     # entire background-processing thread from hanging indefinitely.
-    # Default 120s (2 min) is well above any working model's worst-case
-    # inference time. If your model needs more, raise this — but if
-    # the LLM is hanging, the model is broken; restart Ollama or pick
-    # a different one instead of raising this.
+    #
+    # Default 600s (10 min): the analysis agents each send a ~3-5K-token
+    # prompt (system prompt with taxonomy + retrieved chunks) and
+    # expect ~300-500 tokens of JSON output. On typical CPU/consumer-GPU
+    # hardware, that can be 2-8 minutes per agent. 4 agents run in
+    # parallel, so wall-clock per paper is bounded by max(agent_time).
+    #
+    # If your model needs more, raise via LLM_TIMEOUT_SECONDS in .env.
     llm_timeout_seconds: float = Field(
-        default=120.0,
-        ge=10.0,
+        default=600.0,
+        ge=30.0,
         le=3600.0,
-        description="Per-request timeout for LLM chat calls (seconds). Default 120s.",
+        description="Per-request timeout for LLM chat calls (seconds). Default 600s.",
+    )
+
+    # Hard cap on output tokens per call (forwarded as Ollama's
+    # `num_predict`). Without this, a model that ignores the prompt's
+    # length instruction can run for minutes. Default 512 is enough
+    # for the JSON outputs our agents need (~200-400 tokens each).
+    llm_num_predict: int = Field(
+        default=512,
+        ge=64,
+        le=32768,
+        description="Per-call output token cap (Ollama num_predict). Default 512.",
     )
 
     # ===== Specialized LLM roles (per-agent overrides) =====
@@ -232,6 +252,7 @@ def make_llm(
             host=s.ollama_base_url,
             options=options,
             timeout=s.llm_timeout_seconds,
+            num_predict=s.llm_num_predict,
         )
 
         # --- Alternative: OpenAI-compatible API (uncomment to switch) ---

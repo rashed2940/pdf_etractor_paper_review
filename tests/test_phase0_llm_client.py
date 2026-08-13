@@ -78,3 +78,74 @@ class TestOllamaClient:
             OllamaChatModel("llama3.1:8b")
             kwargs = MockClient.call_args.kwargs
             assert kwargs.get("timeout") == DEFAULT_TIMEOUT_SECONDS
+
+    def test_default_num_predict_is_set(self):
+        """Default num_predict must reach the options dict to prevent
+        runaway generations."""
+        from llm.ollama_client import DEFAULT_NUM_PREDICT, OllamaChatModel
+
+        with patch("ollama.Client") as MockClient:
+            llm = OllamaChatModel("llama3.1:8b")
+            assert llm.options.get("num_predict") == DEFAULT_NUM_PREDICT
+            assert DEFAULT_NUM_PREDICT >= 64
+
+    def test_reasoning_model_detection(self):
+        """is_reasoning_model() must identify known reasoning families."""
+        from llm.ollama_client import is_reasoning_model
+
+        # Detected (must auto-get think=False)
+        assert is_reasoning_model("qwen3:4b")
+        assert is_reasoning_model("qwen3.5:2b")
+        assert is_reasoning_model("deepseek-r1:7b")
+        assert is_reasoning_model("gpt-oss:20b")
+        # Not detected (must NOT get think=False — would 400)
+        assert not is_reasoning_model("llama3.1:8b")
+        assert not is_reasoning_model("qwen2.5-coder:7b-instruct")
+        assert not is_reasoning_model("gemma3:4b")
+        assert not is_reasoning_model("mistral:7b")
+        assert is_reasoning_model("") is False
+
+    def test_reasoning_model_passes_think_false(self):
+        """For a reasoning model, invoke() must pass think=False so the
+        model emits a visible answer instead of hidden reasoning.
+        Regression: qwen3.5:2b hung for 120s without this.
+        """
+        from llm.ollama_client import OllamaChatModel
+
+        # Object-style response (current ollama SDK)
+        class FakeMsg:
+            content = "OK"
+        class FakeResp:
+            message = FakeMsg()
+
+        with patch("ollama.Client") as MockClient:
+            instance = MockClient.return_value
+            instance.chat.return_value = FakeResp()
+            llm = OllamaChatModel("qwen3.5:2b")
+            llm.invoke([{"role": "user", "content": "hi"}])
+            kwargs = instance.chat.call_args.kwargs
+            assert kwargs.get("think") is False, (
+                f"Expected think=False for reasoning model, got {kwargs}"
+            )
+
+    def test_non_reasoning_model_omits_think(self):
+        """For non-reasoning models, the think kwarg must be omitted
+        entirely — Ollama returns 400 if you send think to a model
+        that doesn't accept it."""
+        from llm.ollama_client import OllamaChatModel
+
+        class FakeMsg:
+            content = "OK"
+        class FakeResp:
+            message = FakeMsg()
+
+        with patch("ollama.Client") as MockClient:
+            instance = MockClient.return_value
+            instance.chat.return_value = FakeResp()
+            llm = OllamaChatModel("llama3.1:8b")
+            llm.invoke([{"role": "user", "content": "hi"}])
+            kwargs = instance.chat.call_args.kwargs
+            assert "think" not in kwargs, (
+                f"Expected no `think` kwarg for non-reasoning model, "
+                f"got {kwargs}"
+            )

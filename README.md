@@ -1,6 +1,6 @@
 # Cybersecurity Paper Analyzer
 
-A multi-agent RAG (Retrieval-Augmented Generation) system for cybersecurity research papers. Upload PDFs of scientific papers; the system extracts text, chunks, embeds, and runs four specialized agents in parallel to produce a structured analysis. Ask questions and get grounded answers with paper + page citations.
+A multi-agent RAG (Retrieval-Augmented Generation) system for cybersecurity research papers. Upload PDFs of scientific papers; the system extracts text, chunks, embeds, and runs four specialized agents in parallel to produce a structured analysis. Ask questions and get grounded answers with paper + page citations, or export the full analysis as a single Excel workbook.
 
 Built per [AGENTS.md](AGENTS.md) (spec) and [PLAN.md](PLAN.md) (execution roadmap). See [PHASE_LOG.md](PHASE_LOG.md) for the complete build history.
 
@@ -11,10 +11,11 @@ Built per [AGENTS.md](AGENTS.md) (spec) and [PLAN.md](PLAN.md) (execution roadma
 - 📄 **PDF ingestion** (PyMuPDF) with section-aware chunking
 - 🤖 **4 parallel agents** (Metadata / Cybersecurity / Solution / Summary) producing validated structured output
 - 🔍 **Semantic search** with ChromaDB + optional BM25 hybrid + cross-encoder rerank hooks
-- 🌐 **Flask web UI** (Bootstrap 5, vanilla JS) with upload, status polling, results table, Q&A
+- 🌐 **Flask web UI** (Bootstrap 5, vanilla JS) with upload, status polling, results table, Q&A, and Excel export
 - 💾 **SQLite persistence** for analyzed papers (survives restart)
 - 🛡️ **Prompt-injection shield** on every agent (PDF text is untrusted data)
 - 📑 **Citation-aware answers** with paper + page references
+- 📊 **One-click Excel export** — download every analyzed paper as a single `.xlsx` with full untruncated content
 - 🔄 **Pluggable LLM**: Ollama via the native `ollama` Python package (default) or OpenAI-compatible API
 - 🔄 **Pluggable embeddings**: Ollama `embeddinggemma` (default), SentenceTransformers, or OpenAI
 - 🎯 **100–250 word summaries** + per-aspect breakdown (problem/method/results/contribution/limitations)
@@ -41,8 +42,10 @@ Built per [AGENTS.md](AGENTS.md) (spec) and [PLAN.md](PLAN.md) (execution roadma
 ```powershell
 git clone <repo-url>
 cd pdf_etractor_paper_review
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cp .env.example .env
+copy .env.example .env
 ```
 
 ### 3. Run
@@ -58,8 +61,9 @@ Open http://127.0.0.1:5000 in your browser.
 1. **Upload** PDF files via the upload form
 2. **Watch** status chips update in real time (queued → extracting → analyzing → done)
 3. **Browse** results in the table (sort, search, filter by cybersecurity area)
-4. **Click** any row to expand inline details, or click the title for the full paper page
-5. **Ask** questions in the Q&A page — answers cite paper + page
+4. **Click** any row title to open the full paper detail page
+5. **Export** the full table to Excel with the green **⬇ Export to Excel** button above the table
+6. **Ask** questions at `/ask` — answers cite paper + page
 
 ---
 
@@ -150,7 +154,32 @@ PDF Ingestion → Cleaner → Chunker → Embedder → ChromaDB
 
 For RAG questions, `Retriever` queries ChromaDB → builds prompt with prompt-injection guard → `QAAgent` returns `QAResult` with answer + sources.
 
+The **Excel export** endpoint serializes every paper in `ResultsStore` into a single `.xlsx` workbook (16 columns of full untruncated content, frozen header row, sized column widths, timestamped filename) and streams it as an attachment download.
+
 See [PLAN.md §2](PLAN.md) for the full architecture diagram.
+
+---
+
+## API Endpoints
+
+The Flask app exposes both HTML pages and JSON endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| GET | `/` | Upload page + LLM health indicator |
+| POST | `/upload` | Save PDFs, spawn background processing, return `upload_id` |
+| GET | `/status/<upload_id>` | JSON status for polling |
+| GET | `/results` | Analyzed papers table (sortable, searchable, filterable) |
+| GET | `/paper/<paper_id>` | Detail view for a single paper |
+| GET, POST | `/ask` | Q&A form + grounded answer with sources |
+| GET | `/export/excel` | Download the full table as a single `.xlsx` |
+| GET | `/api/papers` | JSON list of all analyzed papers |
+| DELETE | `/api/papers/<paper_id>` | Delete a paper (ChromaDB + SQLite + PDF) |
+| GET | `/api/uploads` | List in-memory upload sessions |
+| DELETE | `/api/uploads/<upload_id>` | Clear a stuck upload session |
+| GET | `/api/llm_status` | Quick LLM health probe (latency, model, speed) |
+| GET | `/api/export` | Export metadata: `{count, download_url}` |
+| POST | `/api/query` | JSON Q&A endpoint |
 
 ---
 
@@ -158,7 +187,7 @@ See [PLAN.md §2](PLAN.md) for the full architecture diagram.
 
 ```text
 pdf_etractor_paper_review/
-├── app.py                       # Flask entrypoint
+├── app.py                       # Flask entrypoint + all routes
 ├── config/
 │   ├── settings.py              # Env config + LLM/embedding factories
 │   └── logging.py               # Structured logging with secret scrubbing
@@ -178,9 +207,9 @@ pdf_etractor_paper_review/
 │   └── chunker.py
 ├── llm/
 │   ├── __init__.py
-│   └── ollama_client.py            # Native `ollama` package wrapper
+│   └── ollama_client.py         # Native `ollama` package wrapper
 ├── embeddings/
-│   └── embedding_service.py        # Ollama + SentenceTransformers + alternatives
+│   └── embedding_service.py     # Ollama + SentenceTransformers + alternatives
 ├── vectorstore/
 │   └── chroma_store.py
 ├── rag/
@@ -195,19 +224,30 @@ pdf_etractor_paper_review/
 ├── services/
 │   ├── paper_service.py         # PDF → indexed chunks
 │   ├── analysis_service.py      # Coordinator + QAAgent facade
-│   ├── processing_runner.py     # Background threading
-│   ├── processing_status.py     # Thread-safe status registry
+│   ├── processing_runner.py     # Background threading per upload
+│   ├── processing_status.py     # Thread-safe in-memory status registry
 │   └── results_store.py         # SQLite + memory cache
 ├── templates/                   # Jinja + Bootstrap 5
+│   ├── base.html
+│   ├── index.html               # Upload + status
+│   ├── results.html             # Analyzed papers table
+│   ├── paper_detail.html
+│   ├── question.html
+│   └── partials/                # Shared row / status chip fragments
 ├── static/                      # CSS + JS
+│   ├── css/style.css
+│   └── js/app.js
 ├── data/
-│   ├── uploads/                 # User PDFs
-│   ├── chroma/                  # Persistent vector DB
-│   └── app.sqlite               # Analyzed papers
-├── tests/                       # 76 pytest tests (no real Ollama needed)
+│   ├── uploads/                 # User PDFs (gitignored)
+│   ├── chroma/                  # Persistent vector DB (gitignored)
+│   └── app.sqlite               # Analyzed papers (gitignored)
+├── tests/                       # pytest suite (mocked LLMs, no Ollama needed)
 ├── AGENTS.md                    # Spec
 ├── PLAN.md                      # Execution roadmap
 ├── PHASE_LOG.md                 # Build history
+├── requirements.txt
+├── pytest.ini
+├── .env.example
 └── README.md                    # This file
 ```
 
@@ -216,7 +256,7 @@ pdf_etractor_paper_review/
 ## Testing
 
 ```powershell
-# Run all 76 tests
+# Run the full pytest suite
 python -m pytest --tb=short tests/
 
 # Run just one phase
@@ -226,9 +266,7 @@ python -m pytest tests/test_phase3_agents.py
 python -m pytest tests/test_phase4_coordinator.py::TestCoordinator::test_parallel_execution_speedup
 ```
 
-All tests use mocked LLMs (no real Ollama needed). Tests run in ~17 seconds.
-
-For per-phase acceptance scripts (more verbose end-to-end checks), see `tests/_acceptance_phaseN.py`.
+All tests use mocked LLMs (no real Ollama needed). For per-phase acceptance scripts (more verbose end-to-end checks), see `tests/_acceptance_phaseN.py`.
 
 ---
 
@@ -243,9 +281,21 @@ For per-phase acceptance scripts (more verbose end-to-end checks), see `tests/_a
 | 4 | Coordinator (parallel execution + merging) | ✅ |
 | 5 | Flask UI + Background Processing | ✅ |
 | 6 | Quality-of-Life Hooks (BM25 hybrid, rerank, OCR, SQLite) | ✅ |
-| 7 | pytest Suite (76 tests, CI-friendly) | ✅ |
+| 7 | pytest Suite (CI-friendly) | ✅ |
+| 8 | Excel export + UI polish (results table, navbar, footer) | ✅ |
 
 See [PHASE_LOG.md](PHASE_LOG.md) for per-phase details, bug fixes, and architectural decisions.
+
+---
+
+## UI Workflow
+
+1. **Upload page** (`/`) — pick PDFs, watch per-paper status chips, see LLM health indicator
+2. **Results table** (`/results`) — sortable, searchable, filterable by cybersecurity area; click a row title for the full paper page; click **⬇ Export to Excel** in the toolbar to download all papers as `.xlsx`
+3. **Paper detail** (`/paper/<id>`) — full analysis with citations
+4. **Q&A** (`/ask`) — type a question, get a grounded answer with paper + page sources
+
+The navbar contains **Upload** and **Results**. The Q&A page and Excel export are accessible from their dedicated URLs (or via the toolbar button on the Results page).
 
 ---
 
@@ -259,6 +309,13 @@ See [PHASE_LOG.md](PHASE_LOG.md) for per-phase details, bug fixes, and architect
 - ✅ Prompt-injection shield on every agent (PDF text is untrusted data)
 - ✅ Per-paper exception isolation (one bad PDF doesn't break batch)
 - ✅ Citation-backed answers (no fabrication)
+- ✅ SHA-256 duplicate detection on uploaded PDFs (no redundant embedding work)
+
+---
+
+## Author
+
+Created by **Sk Rashed Bin Mohammad**.
 
 ---
 

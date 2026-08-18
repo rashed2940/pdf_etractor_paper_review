@@ -293,7 +293,6 @@ See [PHASE_LOG.md](PHASE_LOG.md) for per-phase details, bug fixes, and architect
 1. **Upload page** (`/`) — pick PDFs, watch per-paper status chips, see LLM health indicator
 2. **Results table** (`/results`) — sortable, searchable, filterable by cybersecurity area; click a row title for the full paper page; click **⬇ Export to Excel** in the toolbar to download all papers as `.xlsx`
 3. **Paper detail** (`/paper/<id>`) — full analysis with citations
-4. **Q&A** (`/ask`) — type a question, get a grounded answer with paper + page sources
 
 The navbar contains **Upload** and **Results**. The Q&A page and Excel export are accessible from their dedicated URLs (or via the toolbar button on the Results page).
 

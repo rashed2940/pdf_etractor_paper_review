@@ -58,6 +58,32 @@ class SolutionAgent(BaseAgent):
             - Distinguish between what the paper PROPOSES and what it
               cites as prior work.
             - Cite sources using the schema below.
+
+            `datasets` rules (important):
+            - The list must NEVER be empty. If the paper evaluates on any
+              named data source, include it. "Data source" is broad: it
+              includes public benchmark datasets, private corpora,
+              collected logs or traffic traces, generated/synthetic
+              test sets, survey collections, code repositories, and
+              well-known pre-trained models used in the evaluation
+              (e.g. "Llama3-8B", "GPT-4", "BERT"), as long as the paper
+              names it.
+            - If the paper genuinely uses NO named data source at all,
+              return a single descriptive entry such as
+              "No named dataset — evaluation performed ad hoc by the
+              authors" so the field is never blank.
+            - Keep each entry short: the dataset or model name plus a
+              brief qualifier.
+
+            `limitations` rules (important):
+            - The value must NEVER be null. If the authors do not have an
+              explicit "Limitations" section, summarise the limitations
+              that ARE stated in the paper (scope restrictions, survey
+              versus empirical study, untested assumptions, missing
+              baselines, threats to validity, evaluation performed on a
+              small or simple testbed).
+            - If the paper truly acknowledges nothing, return
+              "The paper does not explicitly discuss limitations."
             """
         ).strip() + "\n\n" + SOURCE_SCHEMA
 

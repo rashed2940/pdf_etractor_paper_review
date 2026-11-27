@@ -140,24 +140,23 @@ REFUSAL_SENTINEL = (
 
 # ============================================================================
 # Source-citation schema — shared by all 4 analysis agents.
-# Included verbatim in every agent's system prompt so the LLM emits
-# a stable shape (paper_id, page, section, text) and we don't have to
-# recover from invented aliases like {"content": "..."}.
+#
+# IMPORTANT: the agents' `sources` arrays are ALWAYS overwritten by the
+# pipeline with page-accurate references taken from the retrieved chunks
+# (see `BaseAgent.sources_from_context`). So we deliberately ask the LLM
+# for an EMPTY sources array — asking it to emit excerpts just burns
+# output tokens (and used to push the response into the num_predict cap,
+# truncating the JSON and leaving blank columns in the results table).
 # ============================================================================
 SOURCE_SCHEMA = dedent(
     """
-    Source-citation schema (for any "sources" array in your output):
-      Each source is an object with these EXACT field names:
-        {
-          "paper_id": "<string, the paper_id from context>",
-          "page":     <integer or null, 1-based page number>,
-          "section":  "<string or null, e.g. 'Methodology'>",
-          "text":     "<string, a short excerpt (≤ 30 words) from that page>"
-        }
-      Do NOT use "content", "excerpt", "quote", "page_number" or any
-      other key. Only "text" is accepted for the excerpt.
-      If you cannot determine page or section, use null.
-      If you don't cite a specific excerpt, omit the source.
+    Source-citation schema:
+      Your output MUST contain a "sources" key, but leave it as an EMPTY
+      array:  "sources": []
+      Page/section citations are attached automatically by the pipeline
+      from the retrieved chunks, so do NOT write excerpts, quotes, page
+      numbers or chunk ids yourself. Do not use "content", "excerpt",
+      "quote" or "page_number" as keys anywhere.
     """
 ).strip()
 

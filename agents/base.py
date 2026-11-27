@@ -89,6 +89,30 @@ def _extract_json(text: str) -> dict | list | None:
     return None
 
 
+def _looks_truncated(text: str) -> bool:
+    """Heuristically detect a response that was cut off mid-JSON.
+
+    A response truncated by the output-token cap typically has unbalanced
+    braces/brackets or an unterminated string. Detecting this lets us
+    report "raise LLM_NUM_PREDICT" instead of the generic "no JSON found".
+    """
+    t = text.strip()
+    if not t:
+        return False
+    if t.endswith("}") and t.endswith("}"):
+        # Balanced-looking end — but the object could still be malformed.
+        pass
+    if t.count("{") > t.count("}"):
+        return True
+    if t.count("[") > t.count("]"):
+        return True
+    # An odd number of unescaped quotes means the last string never closed.
+    if t.count('"') % 2 == 1:
+        return True
+    # Truncation often leaves a dangling key with no value.
+    return t.rstrip().endswith(":") or t.rstrip().endswith(",")
+
+
 def _default_for(model: Type[BaseModel]) -> BaseModel:
     """Build an instance of `model` with all fields set to safe defaults."""
     fields = model.model_fields
@@ -225,12 +249,29 @@ class BaseAgent(ABC):
             data = _extract_json(content)
             if data is None:
                 last_error = "no JSON found in response"
+                # Distinguish "model returned prose" from "response was
+                # cut off mid-JSON" (output-token cap). The second case
+                # needs a bigger num_predict, not a better prompt.
+                truncated = _looks_truncated(content)
+                if truncated:
+                    last_error = (
+                        "response truncated mid-JSON (likely hit the "
+                        "output token cap)"
+                    )
                 logger.warning(
-                    "Agent %s: %s (attempt %d/%d)",
+                    "Agent %s: %s (attempt %d/%d) len=%d",
                     self.name,
                     last_error,
                     attempt + 1,
                     self.max_retries + 1,
+                    len(content),
+                )
+                # Log a short excerpt so the failure is diagnosable
+                # without dumping megabytes into the log file.
+                logger.debug(
+                    "Agent %s raw response (first 400 chars): %s",
+                    self.name,
+                    content[:400],
                 )
                 continue
 

@@ -91,13 +91,31 @@ registry.mark_done()      [services/processing_status.py]
 | Step | Where | What happens |
 | --- | --- | --- |
 | Thread entry | [services/processing_runner.py](services/processing_runner.py) → `_run_for_paper()` | Updates status to `extracting` (10%), then `chunking` (30%). |
+| Concurrency gate | [services/processing_runner.py](services/processing_runner.py) → `_get_paper_semaphore()` | A global semaphore (size = `settings.paper_concurrency`, default 3) limits how many papers are analysed at once. Without it, N PDFs × 4 agents = up to 4N concurrent LLM requests, which triggers `429` rate limits. The slot is released in a `finally` block, so a failure never leaks it. |
 | SHA-256 dedupe | [services/paper_service.py](services/paper_service.py) → `ingest_pdf()` | Hashes the file; if already indexed, marks `is_duplicate=True` and returns the existing `paper_id` so the analysis still runs. |
 | Open + extract text | [ingestion/pdf_loader.py](ingestion/pdf_loader.py) | PyMuPDF (`fitz`) page-by-page text extraction; per-page metadata (page number, source). |
 | Section detection (optional) | [ingestion/text_cleaner.py](ingestion/text_cleaner.py) → `clean_text()` | Strips headers/footers, normalizes whitespace. |
+| Metadata extraction | [ingestion/metadata_extractor.py](ingestion/metadata_extractor.py) → `extract_metadata()` | Title, authors, date, DOI, venue, institution. Runs 6 layout-aware author strategies (see §4.1.1). |
 | Chunk | [ingestion/chunker.py](ingestion/chunker.py) | Token-aware chunking (`chunk_size`, `chunk_overlap` from settings). Section-aware when the structure is detectable. |
+| Front matter chunk | [ingestion/chunker.py](ingestion/chunker.py) → `_chunk_by_sections()` | The text *before* the first section heading (title + author block) is emitted as its own chunk with section `Front Matter`. Without it the author names never reach the vector store, so `MetadataAgent` cannot recover them. |
 | Embed | [embeddings/embedding_service.py](embeddings/embedding_service.py) | Calls the configured provider — `ollama` (default, native package), `sentence_transformers`, or `openai`. |
-| Store in ChromaDB | [vectorstore/chroma_store.py](vectorstore/chroma_store.py) → `add_chunks()` | Persists vectors + per-chunk metadata (`paper_id`, `filename`, `page`, `section`, `chunk_id`). |
+| Store in ChromaDB | [vectorstore/chroma_store.py](vectorstore/chroma_store.py) → `add_chunks()` | Persists vectors + per-chunk metadata (`paper_id`, `filename`, `title`, `authors`, `publication_date`, `page`, `section`, `chunk_id`). |
 | Return | [services/paper_service.py](services/paper_service.py) → `IngestionResult(paper_id, sha256, is_duplicate, num_chunks)` | Used by the runner. |
+
+#### 4.1.1 Author extraction strategies
+
+`ingestion/metadata_extractor.py` → `_guess_authors()` tries these in order and returns the first confident list:
+
+| # | Strategy | Function | Layout |
+| --- | --- | --- | --- |
+| 2 | Name line + affiliation below | inline in `_guess_authors()` | `Ricky Diaz` / `Faculty of Engineering, Udayana University` |
+| 2b | Bare run of name lines | `_guess_authors_from_block()` | `Brian Singer` / `Lakshmi Adiga` |
+| 2c | Comma-separated line | `_guess_authors_from_csv_line()` | `Tri Cao1 *†, Chengyu Huang1*, …` |
+| 2d | `NAME, Affiliation` on one line | `_guess_authors_from_inline_affiliation()` | `ZEHANG DENG, Department of Computer Science, …` |
+| 2e | Name + affiliation + ORCID stack | `_guess_authors_from_orcid_block()` | `Lokanatha Reddy` / `Verizon` / `0009-0006-6058-3326` |
+| 2f | One name per line + `·` list | `_guess_authors_stacked()` | `Andreas Happe1` / `· Aaron Kaplan2 · Jürgen Cito1` |
+
+Supporting helpers: `_author_region()` (bounds the front matter), `_looks_like_person_name()`, `_looks_like_allcaps_person_name()`, `_looks_like_affiliation()`, `_looks_like_location_line()`, `_looks_like_orcid()`, `_looks_like_metric_name()`, `_strip_author_marks()`, `_split_author_line()`, and the final `_clean_author_list()` pass that removes institution names and duplicates.
 
 ### 4.2 Analyze: Coordinator runs 4 agents in parallel
 
@@ -115,6 +133,7 @@ registry.mark_done()      [services/processing_status.py]
 | Shared base | [agents/base.py](agents/base.py) → `BaseAgent.run()` | Prompt assembly, JSON parse + retry/repair, prompt-injection shield (treats retrieved chunks as untrusted data). |
 | Prompts | [rag/prompts.py](rag/prompts.py) | All agent prompts centralized here. |
 | Merge | [agents/coordinator.py](agents/coordinator.py) → `_merge()` | Combines 4 agent outputs into one `PaperAnalysis`; aggregates `SourceReference`s; sets `analysis_status`. |
+| Never-blank columns | [agents/coordinator.py](agents/coordinator.py) → `_datasets_or_note()` / `_limitations_or_note()` | If the solution agent returns an empty `datasets` list or a null `limitations`, a descriptive note is substituted so no table cell is blank. The notes record an observation — they never invent content. |
 | Failure handling | [agents/coordinator.py](agents/coordinator.py) | Per-agent exceptions become safe defaults; if everything fails, `analysis_status="failed"` and `analysis_error` is set. The coordinator **never** raises. |
 
 ### 4.3 Persist: write PaperAnalysis to SQLite + memory
@@ -292,11 +311,15 @@ The previous sections go **action → file**. This section is the inverse: **fil
 
 | Symbol | Step | What it does |
 | --- | --- | --- |
-| `Settings` (pydantic-settings) | [§1](#1-app-startup--wiring) | Reads `.env` into a typed object. |
+| `Settings` (pydantic-settings) | [§1](#1-app-startup--wiring) | Reads `.env` into a typed object. **OS env vars take priority over `.env`.** |
 | `get_settings()` (lru_cache) | [§1](#1-app-startup--wiring) | Process-wide settings singleton. |
-| `make_llm(role)` | [§1](#1-app-startup--wiring), [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Builds the per-role LLM (Ollama or OpenAI-compatible). |
+| `make_llm(role)` | [§1](#1-app-startup--wiring), [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Builds the per-role LLM (Ollama or OpenAI-compatible). Passes `max_retries` / `backoff_base` from settings. |
 | `model_for_role(role)` | [§2](#2-user-opens-the-upload-page-get-) | Per-agent model override (e.g. `LLM_MODEL_SUMMARIZATION`). |
 | `ensure_directories()` | [§1](#1-app-startup--wiring) | Creates `data/uploads/`, `data/chroma/`, etc. |
+| `paper_concurrency` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Max papers analysed in parallel (default 3). |
+| `llm_num_predict` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Output token cap per agent call (default 4096). |
+| `llm_max_retries` / `llm_retry_backoff` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Retry count and exponential-backoff base for transient LLM errors. |
+| `max_upload_mb` | [§3](#3-user-uploads-one-or-more-pdfs-post-upload) | Per-request upload limit in MB (1–2048). |
 
 ### 14.3 `config/logging.py`
 
@@ -311,6 +334,7 @@ The previous sections go **action → file**. This section is the inverse: **fil
 | --- | --- | --- |
 | `BaseAgent.run(ctx)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel), [§8](#8-qa-page-getpost-ask) | Assembles prompt, calls LLM, parses JSON, retries/repairs on failure. Enforces the prompt-injection shield. |
 | `BaseAgent._coerce_aliases()` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Accepts common LLM field aliases (`excerpt`, `quote` → `text`). |
+| `BaseAgent._looks_truncated(text)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Detects a response cut off mid-JSON (usually the output token cap) so the agent can report a clear error instead of a parse failure. |
 
 ### 14.5 `agents/coordinator.py`
 
@@ -319,6 +343,7 @@ The previous sections go **action → file**. This section is the inverse: **fil
 | `Coordinator.analyze_paper(paper_id, top_k=None)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Main entry: builds context, fans out 4 agents, merges results. |
 | `Coordinator._build_context(paper_id)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Calls `Retriever` to fetch top-k chunks; assembles `AgentContext`. |
 | `Coordinator._run_one(agent, ctx)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Wraps one agent call with exception capture (returns safe default). |
+| `Coordinator._datasets_or_note()` / `_limitations_or_note()` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Substitute a descriptive note when `datasets` / `limitations` come back empty, so no table cell is blank. |
 | `Coordinator._merge(per_agent_results)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Combines outputs into a single `PaperAnalysis`; aggregates sources. |
 | `DEFAULT_MAX_WORKERS = 4` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | One worker per analysis agent. |
 
@@ -341,15 +366,21 @@ Each agent inherits from `BaseAgent` and overrides `_system_prompt` + `_user_pro
 | `pdf_loader.py` | `extract_pages(path)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | PyMuPDF page-by-page text extraction. |
 | `text_cleaner.py` | `clean_text(text)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Strips headers/footers, normalises whitespace. |
 | `chunker.py` | `chunk_pages(pages, chunk_size, chunk_overlap)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Token-aware, section-aware chunking. |
-| `metadata_extractor.py` | `extract_pdf_metadata(path)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | PDF info-dict metadata (title, author, etc.). |
+| `chunker.py` | `FRONT_MATTER_SECTION` / `_chunk_by_sections()` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Emits the title + author block as its own chunk so it reaches the vector store and the `MetadataAgent`. |
+| `metadata_extractor.py` | `extract_metadata(pdf_meta, first_page_text, filename)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Title, authors, date, DOI, venue, institution from the PDF info dict + first-page heuristics. |
+| `metadata_extractor.py` | `_guess_authors()` + 6 strategy helpers | [§4.1.1](#411-author-extraction-strategies) | Layout-aware author extraction (see §4.1.1). |
+| `metadata_extractor.py` | `_coerce_year()` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Parses the PDF `D:YYYYMMDD…` date format and free-text years. |
 | `ocr_loader.py` | `ocr_pages(path)` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Tesseract fallback (opt-in via `OCR_ENABLED`). |
 
 ### 14.8 `llm/ollama_client.py`
 
 | Symbol | Step | What it does |
 | --- | --- | --- |
-| `OllamaLLM.invoke(messages)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel), [§8](#8-qa-page-getpost-ask), [§12](#12-llm-health-probe-get-api_llm_status) | Wraps the native `ollama` SDK chat call with retries + timeout. |
-| `OllamaLLM.model` | [§2](#2-user-opens-the-upload-page-get-), [§12](#12-llm-health-probe-get-api_llm_status) | Active model name (for display in UI). |
+| `OllamaChatModel.invoke(messages)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel), [§8](#8-qa-page-getpost-ask), [§12](#12-llm-health-probe-get-api_llm_status) | Wraps the native `ollama` SDK chat call with retries + timeout. |
+| `OllamaChatModel._invoke_once(messages)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | The single underlying chat call. |
+| `OllamaChatModel._sleep_before_retry(attempt, exc)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Exponential backoff (`llm_retry_backoff ** attempt`, capped at 60 s, with jitter). |
+| `_is_retryable(exc)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Classifies `429` / `5xx` / timeouts / connection resets as transient; everything else fails fast. |
+| `OllamaChatModel.model` | [§2](#2-user-opens-the-upload-page-get-), [§12](#12-llm-health-probe-get-api_llm_status) | Active model name (for display in UI). |
 
 ### 14.9 `embeddings/embedding_service.py`
 
@@ -401,6 +432,8 @@ Each agent inherits from `BaseAgent` and overrides `_system_prompt` + `_user_pro
 | `analysis_service.py` | `AnalysisService.analyze_all_papers(paper_ids)` | [§4.2](#42-analyze-coordinator-runs-4-agents-in-parallel) | Bulk analyse (failures are isolated per paper). |
 | `processing_runner.py` | `start_background_processing(upload_id, paths_by_paper_id, analysis_service=...)` | [§3](#3-user-uploads-one-or-more-pdfs-post-upload) | Spawns one daemon thread per PDF. |
 | `processing_runner.py` | `_run_for_paper(upload_id, paper_id, path, ...)` | [§4](#4-background-processing-per-pdf-ingest--analyze--store) | Per-thread entry: ingest → analyze → store, with status updates and exception isolation. |
+| `processing_runner.py` | `_get_paper_semaphore()` | [§4.1](#41-ingest-read-pdf-clean-chunk-embed-store-in-chromadb) | Lazily-built global semaphore sized by `settings.paper_concurrency`; caps concurrent paper analyses. |
+| `processing_runner.py` | `_safe_name(path)` | [§4](#4-background-processing-per-pdf-ingest--analyze--store) | Tolerant filename helper (accepts `str` or `Path`) used in log calls. |
 | `processing_status.py` | `get_registry()` | [§1](#1-app-startup--wiring), [§4](#4-background-processing-per-pdf-ingest--analyze--store) | Process-wide `ProcessingStatusRegistry` singleton. |
 | `processing_status.py` | `ProcessingStatusRegistry.create_upload(filenames)` | [§3](#3-user-uploads-one-or-more-pdfs-post-upload) | Allocate a new `upload_id` and per-paper status rows. |
 | `processing_status.py` | `ProcessingStatusRegistry.update(upload_id, paper_id, state, progress, message)` | [§4](#4-background-processing-per-pdf-ingest--analyze--store) | Update a single paper's chip. |
@@ -426,6 +459,11 @@ A quick lookup if you only know the function name or the symptom:
 | Status chip stuck on `analyzing` | `services/processing_runner.py` → `_run_for_paper` (check the LLM/embedder call). |
 | Excel export missing columns | `app.py` → `export_excel()` (the `headers` list). |
 | `/ask` returns generic error | `app.py` → `_humanize_ask_error` (maps common failure modes). |
+| `429 too many concurrent requests` in the log | `config/settings.py` → `paper_concurrency` (lower it). `services/processing_runner.py` → `_get_paper_semaphore()`. |
+| Analysis feels slow | Same two places — raise `paper_concurrency` if the LLM is not rate-limiting. |
+| `authors` column empty for a paper | `ingestion/metadata_extractor.py` → `_guess_authors()` (see §4.1.1); also check that the `Front Matter` chunk exists in `ingestion/chunker.py`. |
+| `datasets` / `limitations` column empty | `agents/solution_agent.py` (prompt rules) + `agents/coordinator.py` → `_datasets_or_note()` / `_limitations_or_note()`. |
+| A `.env` change has no effect | OS env vars override `.env`. Clear the stale shell variable and restart the app (see README → Configuration). |
 | `RuntimeError: does not match collection dimensionality` | `embeddings/embedding_service.py` — embedding model switched without re-indexing. |
 | Prompt-injection attempts in PDF text not blocked | `agents/base.py` + `rag/prompts.py` — re-check the system prompt's untrusted-data clause. |
 | Status registry grows without bound | `services/processing_status.py` — `api_clear_upload` removes one; restart clears all. |

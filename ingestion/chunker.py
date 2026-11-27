@@ -45,6 +45,10 @@ _SECTION_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 # Sections that come BEFORE the first numbered section (Abstract, Introduction).
 _EARLY_SECTIONS = {"Abstract", "Introduction"}
 
+#: Name given to the chunk that holds a paper's front matter (the
+#: title / author / affiliation block that precedes the first section).
+FRONT_MATTER_SECTION = "Front Matter"
+
 
 @dataclass
 class TextChunk:
@@ -164,6 +168,29 @@ def _chunk_by_sections(
         return pages_list[-1][0]
 
     full_text = "\n\n".join(t for _, t in pages_list)
+
+    # --- Front matter -------------------------------------------------
+    # Everything before the first detected section holds the paper's
+    # title, author list and affiliations. Without this chunk that
+    # information never reaches the vector store, so the MetadataAgent
+    # cannot recover the authors (AGENTS.md §11.2) and the LLM has to
+    # guess. Emit it as its own chunk so it is retrievable and citable.
+    first_section_start = sections[0][1] if sections else len(full_text)
+    front_matter = full_text[:first_section_start].strip()
+    if front_matter:
+        for piece in _split_into_subchunks(
+            front_matter, chunk_size, chunk_overlap
+        ):
+            chunks.append(
+                TextChunk(
+                    chunk_id=f"{paper_id}_chunk_{uuid.uuid4().hex[:8]}",
+                    paper_id=paper_id,
+                    text=piece,
+                    page=offset_to_page(0),
+                    section=FRONT_MATTER_SECTION,
+                )
+            )
+
     for section_name, start, end in sections:
         section_text = full_text[start:end]
         # Skip References section — usually not useful for RAG (and huge).
@@ -225,4 +252,4 @@ def _chunk_whole_doc(
     return chunks
 
 
-__all__ = ["TextChunk", "chunk_pages"]
+__all__ = ["TextChunk", "chunk_pages", "FRONT_MATTER_SECTION"]

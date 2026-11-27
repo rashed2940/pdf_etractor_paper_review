@@ -323,9 +323,11 @@ class Coordinator:
             problem_statement=getattr(sol, "problem_statement", None) if sol else None,
             proposed_solution=getattr(sol, "proposed_solution", None) if sol else None,
             methodology=getattr(sol, "methodology", None) if sol else None,
-            datasets=getattr(sol, "datasets", []) if sol else [],
+            datasets=_datasets_or_note(getattr(sol, "datasets", []) if sol else []),
             key_results=getattr(sol, "key_results", None) if sol else None,
-            limitations=getattr(sol, "limitations", None) if sol else None,
+            limitations=_limitations_or_note(
+                getattr(sol, "limitations", None) if sol else None
+            ),
             sources=sources,
             analysis_status="ok",
             analysis_error=None,
@@ -339,4 +341,39 @@ def _build_default_embedding_service():
     return get_embedding_service()
 
 
-__all__ = ["Coordinator", "DEFAULT_MAX_WORKERS"]
+#: Placeholder used when the agent reports no datasets. It records that
+#: the absence was observed rather than leaving the cell blank.
+NO_DATASETS_NOTE = (
+    "No named dataset — the evaluation was performed ad hoc by the authors"
+)
+
+#: Placeholder used when the paper discusses no limitations at all.
+NO_LIMITATIONS_NOTE = "The paper does not explicitly discuss limitations."
+
+
+def _datasets_or_note(datasets: list[str] | None) -> list[str]:
+    """Return the dataset list, or a note when it is empty.
+
+    A blank cell reads as "not analysed" in the UI, which is misleading
+    for papers that legitimately use no named dataset. The note makes
+    the situation explicit without inventing a dataset (AGENTS.md §24).
+    """
+    cleaned = [d for d in (datasets or []) if d and str(d).strip()]
+    if cleaned:
+        return cleaned
+    return [NO_DATASETS_NOTE]
+
+
+def _limitations_or_note(limitations: str | None) -> str:
+    """Return the limitations text, or a note when it is missing."""
+    if limitations and str(limitations).strip():
+        return str(limitations).strip()
+    return NO_LIMITATIONS_NOTE
+
+
+__all__ = [
+    "Coordinator",
+    "DEFAULT_MAX_WORKERS",
+    "NO_DATASETS_NOTE",
+    "NO_LIMITATIONS_NOTE",
+]

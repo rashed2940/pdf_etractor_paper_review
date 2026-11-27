@@ -76,6 +76,10 @@ All configuration lives in `.env` (copy from `.env.example`). Key settings:
 LLM_PROVIDER=ollama
 LLM_MODEL=llama3.1:8b
 OLLAMA_BASE_URL=http://localhost:11434
+LLM_NUM_PREDICT=4096          # output token cap (raise for long analyses)
+LLM_MAX_RETRIES=5             # retries on transient errors (429/5xx/timeouts)
+LLM_RETRY_BACKOFF=2.0         # backoff base in seconds (2^n, capped at 60s)
+TEMPERATURE=0
 
 # === Embeddings ===
 EMBEDDING_PROVIDER=ollama
@@ -85,9 +89,54 @@ EMBEDDING_MODEL=embeddinggemma:latest
 CHROMA_PERSIST_DIRECTORY=./data/chroma
 SQLITE_PATH=./data/app.sqlite
 
+# === Chunking / Retrieval ===
+CHUNK_SIZE=2000
+CHUNK_OVERLAP=400
+TOP_K=6
+SCORE_THRESHOLD=0.0
+
+# === Throughput ===
+PAPER_CONCURRENCY=3            # papers analysed in parallel (see below)
+
+# === Uploads ===
+MAX_UPLOAD_MB=2048             # per-request upload limit (1–2048 MB)
+
 # === OCR (opt-in) ===
 OCR_ENABLED=false
 ```
+
+> **Environment precedence.** OS environment variables **override** `.env`
+> (this is `pydantic-settings` behaviour). If a setting seems "stuck" after
+> editing `.env`, check for a stale shell variable and clear it:
+>
+> ```powershell
+> Get-ChildItem Env: | Where-Object { $_.Name -match '^(LLM_|EMBEDDING_|OLLAMA_|CHROMA_|CHUNK_|UPLOAD_|MAX_|PAPER_|OCR_|SECRET_|LOG_|SQLITE_|TOP_K|SCORE_|TEMPERATURE)' } |
+>   ForEach-Object { Remove-Item "Env:\$($_.Name)" }
+> ```
+>
+> Then restart the app. (VS Code's `python.terminal.useEnvFile: true`
+> snapshots `.env` into the terminal when the terminal is created, so a
+> terminal opened *before* your edit will keep the old values.)
+
+### Throughput tuning — `PAPER_CONCURRENCY`
+
+Each paper is analysed by 4 parallel agents, so an unbounded number of
+uploaded PDFs produces an unbounded number of concurrent LLM requests.
+That is the usual cause of `429 too many concurrent requests` errors and
+of slow, throttled analysis.
+
+`PAPER_CONCURRENCY` puts a semaphore around the per-paper analysis so
+at most N papers are in flight at once. The default of **3** keeps the
+Ollama instance healthy while still using the hardware well.
+
+| Symptom | Fix |
+| --- | --- |
+| `429 too many concurrent requests` in the log | Lower `PAPER_CONCURRENCY` to 2 |
+| Analysis feels slow, GPU/CPU idle | Raise `PAPER_CONCURRENCY` to 4–6 |
+| `Analysis Error: ... output token cap` | Raise `LLM_NUM_PREDICT` |
+
+> **Note:** raising `PAPER_CONCURRENCY` also raises total LLM token use,
+> so watch your provider's rate limits.
 
 ### Switching Models
 
@@ -157,6 +206,57 @@ For RAG questions, `Retriever` queries ChromaDB → builds prompt with prompt-in
 The **Excel export** endpoint serializes every paper in `ResultsStore` into a single `.xlsx` workbook (16 columns of full untruncated content, frozen header row, sized column widths, timestamped filename) and streams it as an attachment download.
 
 See [PLAN.md §2](PLAN.md) for the full architecture diagram.
+
+---
+
+## Metadata Extraction
+
+Getting the title, authors and publication date right is the part of
+the pipeline that varies the most between publishers, so it is handled
+in two independent places.
+
+### 1. Front matter chunk (structural)
+
+The section-aware chunker starts at the first detected section heading
+(`Abstract`, `Introduction`, …). Everything *before* that — the title,
+the author block and the affiliations — would therefore be dropped, and
+the `MetadataAgent` would never see the authors at all.
+
+`ingestion/chunker.py` now emits that block as its own chunk with the
+section name `Front Matter`. It is embedded and stored like any other
+chunk, so the agent can cite it (page 1) and the retriever can find it.
+
+### 2. Layout-aware author heuristics
+
+`ingestion/metadata_extractor.py` recognises the author layouts used by
+the major publishers. Each strategy is tried in turn and the first one
+that yields a confident list wins:
+
+| Strategy | Layout | Example |
+| --- | --- | --- |
+| 2 | Name on its own line, affiliation below | `Ricky Diaz` / `Faculty of Engineering, Udayana University` |
+| 2b | Bare run of name lines | `Brian Singer` / `Lakshmi Adiga` |
+| 2c | Comma-separated list on one line | `Tri Cao1 *†, Chengyu Huang1*, …` |
+| 2d | `NAME, Affiliation` on one line (ALL CAPS) | `ZEHANG DENG, Department of Computer Science, …` |
+| 2e | Name + affiliation + ORCID iD stack | `Lokanatha Reddy` / `Verizon` / `0009-0006-6058-3326` |
+| 2f | One name per line + `·` separated names | `Andreas Happe1` / `· Aaron Kaplan2 · Jürgen Cito1` |
+
+A final cleanup pass removes institution names and metric-like names
+(`State Management`, `Tool Usage Accuracy`) that would otherwise be
+mistaken for people.
+
+### 3. Never leave a cell blank
+
+`datasets` and `limitations` are the two columns most often empty. The
+`SolutionAgent` prompt now requires them to be non-empty, and the
+`Coordinator` applies a last-resort fallback so the table always shows
+something meaningful rather than a blank cell:
+
+- `datasets` → `No named dataset — the evaluation was performed ad hoc by the authors`
+- `limitations` → `The paper does not explicitly discuss limitations.`
+
+These notes record an *observation*, they do not invent content
+(`AGENTS.md` §24 — hallucination prevention).
 
 ---
 

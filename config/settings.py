@@ -85,13 +85,47 @@ class Settings(BaseSettings):
 
     # Hard cap on output tokens per call (forwarded as Ollama's
     # `num_predict`). Without this, a model that ignores the prompt's
-    # length instruction can run for minutes. Default 512 is enough
-    # for the JSON outputs our agents need (~200-400 tokens each).
+    # length instruction can run for minutes.
+    #
+    # The SolutionAgent returns 8 content fields, so it needs far more
+    # headroom than the other agents: at 512 tokens its JSON was cut
+    # off mid-object ("no JSON found in response") and every solution
+    # column came back empty. 4096 comfortably fits all four agents.
     llm_num_predict: int = Field(
-        default=512,
+        default=4096,
         ge=64,
         le=32768,
-        description="Per-call output token cap (Ollama num_predict). Default 512.",
+        description="Per-call output token cap (Ollama num_predict). Default 4096.",
+    )
+
+    # ===== LLM transient-error retry =====
+    # Cloud-hosted models enforce a per-account concurrency limit. When
+    # many papers are analysed at once (4 agents x N papers) the surplus
+    # requests get HTTP 429 "too many concurrent requests", and every
+    # agent burns its retries instantly, leaving blank columns in the
+    # results table.
+    #
+    # The LLM client retries those transient failures (429 / 5xx /
+    # connection resets) with exponential backoff + jitter, so a burst
+    # never permanently fails an agent run.
+    llm_max_retries: int = Field(
+        default=5,
+        ge=0,
+        le=20,
+        description=(
+            "Max retries for transient LLM failures (429 rate limits, "
+            "5xx, connection resets). Default 5."
+        ),
+    )
+    llm_retry_backoff: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=30.0,
+        description=(
+            "Base seconds for exponential backoff between transient-failure "
+            "retries. Actual delay = backoff^attempt (capped at 60s) with "
+            "random jitter. Default 2.0."
+        ),
     )
 
     # ===== Specialized LLM roles (per-agent overrides) =====
@@ -157,6 +191,27 @@ class Settings(BaseSettings):
                 stacklevel=2,
             )
         return self
+
+    # ===== Processing concurrency =====
+    # How many papers may be processed (ingest + 4-agent analysis) at the
+    # same time. Each paper runs 4 agents in parallel, so the number of
+    # simultaneous LLM requests is roughly `paper_concurrency * 4`.
+    #
+    # Cloud LLM hosts enforce a per-account concurrency limit and answer
+    # the surplus with HTTP 429. Spawning one thread per PDF (178 PDFs
+    # => 712 concurrent requests) made every bulk upload crawl and left
+    # blank columns. Keep this low enough that `paper_concurrency * 4`
+    # stays under the provider's limit.
+    paper_concurrency: int = Field(
+        default=3,
+        ge=1,
+        le=32,
+        description=(
+            "Max papers processed in parallel. Each paper runs 4 agents, "
+            "so this also bounds concurrent LLM requests to ~4x this "
+            "value. Default 3 (=> ~12 concurrent LLM calls)."
+        ),
+    )
 
     # ===== Storage =====
     chroma_persist_directory: Path = Field(
@@ -253,6 +308,8 @@ def make_llm(
             options=options,
             timeout=s.llm_timeout_seconds,
             num_predict=s.llm_num_predict,
+            max_retries=s.llm_max_retries,
+            backoff_base=s.llm_retry_backoff,
         )
 
         # --- Alternative: OpenAI-compatible API (uncomment to switch) ---

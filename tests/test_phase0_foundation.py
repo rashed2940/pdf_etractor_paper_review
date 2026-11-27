@@ -7,13 +7,23 @@ from __future__ import annotations
 
 
 class TestSettings:
-    def test_settings_defaults_load(self):
+    def test_settings_defaults_load(self, monkeypatch):
         """Verify the *field-level* defaults declared in Settings.
 
         We instantiate Settings with `_env_file=None` so the test is
         independent of any .env the developer happens to have on disk.
+        We also clear the matching OS environment variables, because
+        pydantic-settings gives those precedence over the `.env` file
+        (and over field defaults) — without this the assertions below
+        would depend on the developer's shell.
         """
         from config.settings import Settings
+
+        for var in (
+            "LLM_PROVIDER", "LLM_MODEL", "EMBEDDING_PROVIDER",
+            "EMBEDDING_MODEL", "LLM_NUM_PREDICT", "LLM_TIMEOUT_SECONDS",
+        ):
+            monkeypatch.delenv(var, raising=False)
 
         s = Settings(_env_file=None)
         assert s.llm_provider == "ollama"
@@ -24,11 +34,18 @@ class TestSettings:
         # Default embeddings: Ollama embeddinggemma (768-dim).
         assert s.embedding_provider == "ollama"
         assert s.embedding_model == "embeddinggemma:latest"
-        # Default per-call output cap.
-        assert s.llm_num_predict == 512
+        # Default per-call output cap. Raised to 4096 in the field
+        # definition because the SolutionAgent returns 8 content
+        # fields and 512 truncated its JSON mid-object.
+        assert s.llm_num_predict == 4096
         # Default timeout: 600s (10 min) — long enough for 3-5K-token
         # prompts on typical CPU/consumer-GPU hardware.
         assert s.llm_timeout_seconds == 600
+        # Default transient-failure retry policy.
+        assert s.llm_max_retries == 5
+        assert s.llm_retry_backoff == 2.0
+        # Default paper concurrency gate (=> ~12 concurrent LLM calls).
+        assert s.paper_concurrency == 3
 
     def test_settings_per_role_model_fallback(self):
         from config.settings import get_settings

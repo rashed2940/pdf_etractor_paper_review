@@ -24,7 +24,9 @@ Key behaviors:
 """
 from __future__ import annotations
 
+import random
 import re
+import time
 from typing import Any
 
 from config.logging import get_logger
@@ -44,6 +46,59 @@ DEFAULT_TIMEOUT_SECONDS = 600
 # ignores the prompt's length instruction can run for minutes. 512
 # is enough for the JSON outputs our agents need (~200-400 tokens).
 DEFAULT_NUM_PREDICT = 512
+
+# ============================================================================
+# Transient-error retry (rate limits / connection resets)
+# ============================================================================
+# Cloud-hosted Ollama models (e.g. "minimax-m3:cloud") enforce a
+# per-account concurrency limit. When the app analyses many papers at
+# once (4 agents x N papers), the surplus requests get HTTP 429
+# "too many concurrent requests" and every agent burns its retries
+# instantly, leaving blank columns in the results table.
+#
+# We therefore retry transient failures with exponential backoff +
+# jitter inside the client, so the agent layer only ever sees a hard
+# failure after the server has genuinely refused us.
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_BACKOFF_BASE = 2.0
+DEFAULT_BACKOFF_CAP = 60.0
+
+# Substrings that identify a retryable (transient) failure.
+_RETRYABLE_MARKERS = (
+    "429",  # too many requests / rate limit
+    "too many concurrent requests",
+    "rate limit",
+    "ratelimit",
+    "502",  # bad gateway (cloud proxy hiccup)
+    "503",  # service unavailable / overloaded
+    "504",  # gateway timeout
+    "timeout",
+    "timed out",
+    "temporarily unavailable",
+    "connection reset",
+    "connection aborted",
+    "connection refused",
+    "remote end closed",
+    "server disconnected",
+    "incomplete chunked read",
+    "eof occurred",
+)
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    """Return True if `exc` looks like a transient, retryable failure.
+
+    Retries are attempted for HTTP 429/5xx, connection resets, and
+    timeouts. Everything else (bad model name, auth failure, malformed
+    request) is raised immediately — retrying those just wastes time.
+    """
+    type_name = type(exc).__name__.lower()
+    msg = (str(exc) or "").lower()
+    if "timeout" in type_name:
+        return True
+    haystack = f"{type_name} {msg}"
+    return any(marker in haystack for marker in _RETRYABLE_MARKERS)
+
 
 # Model-name patterns that indicate a "reasoning" model which emits
 # internal chain-of-thought in a separate `thinking` field. Without
@@ -113,6 +168,8 @@ class OllamaChatModel:
         options: dict[str, Any] | None = None,
         timeout: float | None = None,
         num_predict: int | None = None,
+        max_retries: int | None = None,
+        backoff_base: float | None = None,
     ) -> None:
         self.model = model
         self.host = host.rstrip("/")
@@ -124,6 +181,13 @@ class OllamaChatModel:
             self.options["num_predict"] = DEFAULT_NUM_PREDICT
         self.timeout = (
             timeout if timeout is not None else DEFAULT_TIMEOUT_SECONDS
+        )
+        # Retry policy for transient failures (429 / 5xx / connection).
+        self.max_retries = (
+            max_retries if max_retries is not None else DEFAULT_MAX_RETRIES
+        )
+        self.backoff_base = (
+            backoff_base if backoff_base is not None else DEFAULT_BACKOFF_BASE
         )
         # Detect reasoning-model families so we can pass think=False.
         self._is_reasoning = is_reasoning_model(model)
@@ -143,8 +207,29 @@ class OllamaChatModel:
                 "Install with `pip install ollama`."
             ) from exc
 
+    def _sleep_before_retry(self, attempt: int, exc: BaseException) -> None:
+        """Sleep with exponential backoff + jitter before retrying."""
+        delay = min(
+            self.backoff_base ** attempt,
+            DEFAULT_BACKOFF_CAP,
+        )
+        # Jitter avoids a thundering herd when many agents back off at once.
+        delay *= 0.5 + random.random() * 0.5
+        logger.warning(
+            "Ollama transient failure (attempt %d/%d): %s — retrying in %.1fs",
+            attempt + 1,
+            self.max_retries + 1,
+            exc,
+            delay,
+        )
+        time.sleep(delay)
+
     def invoke(self, messages: list[dict[str, str]]) -> _OllamaResponse:
         """Send a chat completion request and return a response with `.content`.
+
+        Transient failures (HTTP 429 rate limits, 5xx, connection resets)
+        are retried with exponential backoff + jitter so a burst of
+        concurrent requests does not permanently fail an agent run.
 
         Args:
             messages: List of {"role", "content"} dicts (system/user/assistant).
@@ -153,6 +238,26 @@ class OllamaChatModel:
             TimeoutError: If Ollama doesn't respond within `self.timeout` s.
             Exception:     Any underlying Ollama/HTTP error.
         """
+        last_exc: BaseException | None = None
+
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._invoke_once(messages)
+            except TimeoutError:
+                # Timeouts are handled by the caller (BaseAgent fails fast
+                # on them) — do not retry here, the budget is already spent.
+                raise
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                if not _is_retryable(exc) or attempt >= self.max_retries:
+                    raise
+                self._sleep_before_retry(attempt, exc)
+
+        # Unreachable — the loop either returns or raises.
+        raise last_exc  # type: ignore[misc]
+
+    def _invoke_once(self, messages: list[dict[str, str]]) -> _OllamaResponse:
+        """Single chat attempt (no retry logic)."""
         chat_kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": messages,

@@ -47,3 +47,4 @@ openpyxl>=3.1.0,<4.0.0   # Excel export of analyzed papers
 pytest>=8.0.0,<9.0.0
 pytest-cov>=4.1.0,<6.0.0
 pytest-mock>=3.12.0,<4.0.0
+reportlab>=4.0.0,<5.0.0       # generates fixture PDFs for the test suite
